@@ -1,0 +1,50 @@
+#!/bin/bash
+# Fronius-Waechter - Deinstallation
+# command <ZUFALLSKENNUNG> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
+#
+# LoxBerry raeumt config/, log/ und data/ des Plugins selbst weg - aber nur die
+# VERZEICHNISSE. Die Zweitschrift DANEBEN traegt das Aktionstoken und die
+# Adressen der Datamanager; sie wird hier entfernt. Der Ordnername kommt NUR
+# aus $3 (sonst die Vorgabe), nie aus dem Ablageort (Regeln/06).
+ARGV3=$3
+ARGV5=$5
+PFOLDER="${ARGV3:-froniuswaechter}"
+case "$PFOLDER" in
+    ''|*/*|*..*|system)
+        echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts entfernt."
+        exit 0 ;;
+esac
+BASE="${ARGV5:-$LBHOMEDIR}"
+if [ -z "$BASE" ]; then
+    SELF=$(cd "$(dirname "$0")" && pwd)
+    BASE=$(cd "$SELF/../../.." 2>/dev/null && pwd)
+fi
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ] \
+   || [ ! -f "$BASE/config/system/general.json" ]; then
+    echo "<WARNING> Kein LoxBerry-Wurzelverzeichnis erkannt ('$BASE') - nichts entfernt."
+    echo "<WARNING> Bitte von Hand nachsehen: config/plugins/$PFOLDER.backup.json* und data/plugins/$PFOLDER.*"
+    exit 0
+fi
+CP="$BASE/config/plugins/$PFOLDER"
+DP="$BASE/data/plugins/$PFOLDER"
+for F in "$CP.backup.json"* "$CP.kaputt.json"* "$DP.upgrade_laeuft"; do
+    if [ -e "$F" ] || [ -L "$F" ]; then
+        rm -f "$F" 2>/dev/null
+    fi
+done
+rm -rf "${DP:?}" 2>/dev/null
+REST=""
+for F in "$CP.backup.json"* "$CP.kaputt.json"* "$DP.upgrade_laeuft" "$DP"; do
+    if [ -e "$F" ] || [ -L "$F" ]; then
+        REST="$REST $F"
+    fi
+done
+if [ -z "$REST" ]; then
+    echo "<OK> Fronius-Waechter entfernt. Neben dem Plugin-Ordner liegt nichts mehr (Zweitschrift mit dem Aktionstoken, .alt, Marke)."
+else
+    echo "<WARNING> Fronius-Waechter entfernt, aber diese Dateien liessen sich nicht loeschen:$REST"
+    echo "<WARNING> Sie koennen das Aktionstoken enthalten - bitte von Hand entfernen."
+fi
+echo "<INFO> Zurueckbehaltene MQTT-Werte (Status, Fehlercode, Stoerung, Modulzustand) bleiben im Broker,"
+echo "<INFO> bis sie jemand loescht; die Eingaenge in Loxone bekommen keine neuen Werte mehr."
+exit 0

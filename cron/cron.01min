@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fronius-Waechter - Minutentakt. Den bin- und den log-Pfad setzt der Installer ein.
+# frw_dienst.php tut nur etwas, wenn im Reiter Einstellungen "Dienst einschalten"
+# angehakt ist (ab Werk aus); der eingestellte Takt (Vorgabe 300 s) entscheidet,
+# ob dieser Lauf abfragt. Sperren und Upgrade-Marke stehen in frw_takt().
+#
+# Die Fehlerausgabe geht ins Protokoll, nicht nach /dev/null (Regeln/03). Ordner
+# und Datei werden vorher angelegt; ist die Datei nicht schreibbar, geht die
+# Fehlerausgabe nach /dev/null und der Lauf findet trotzdem statt (Regeln/06).
+mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
+ERR="REPLACELBPLOGDIR/cron.err"
+touch "$ERR" 2>/dev/null
+[ -f "$ERR" ] && [ -w "$ERR" ] || ERR=/dev/null
+php "REPLACELBPBINDIR/frw_dienst.php" >/dev/null 2>>"$ERR"

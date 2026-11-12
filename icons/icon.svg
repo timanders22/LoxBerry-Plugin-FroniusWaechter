@@ -1,0 +1,75 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25" />
+    </filter>
+  </defs>
+
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
+
+  <g filter="url(#shadow)" fill="#ffffff">
+    <!-- Main Center Motif: Fronius Inverter, Battery & Guardian Shield -->
+    <g transform="translate(256, 185) scale(1.18)">
+      
+      <!-- Battery Stack (Links) -->
+      <g>
+        <rect x="-70" y="-12" width="48" height="15" rx="3.5" />
+        <rect x="-70" y="7" width="48" height="15" rx="3.5" />
+        <rect x="-70" y="26" width="48" height="15" rx="3.5" />
+        <rect x="-70" y="45" width="48" height="15" rx="3.5" />
+        <!-- Battery Base -->
+        <rect x="-72" y="64" width="52" height="8" rx="2" />
+      </g>
+
+      <!-- Connection Cables -->
+      <path d="M -22 15 L -8 15" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+      <path d="M -22 35 L -8 35" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+
+      <!-- Fronius Inverter (Rechts) -->
+      <g>
+        <!-- Antenna (WLAN Modul) -->
+        <path d="M 32 -60 L 32 -76" stroke="#ffffff" stroke-width="4" stroke-linecap="round" />
+        <circle cx="32" cy="-78" r="3" />
+        
+        <!-- Backplate / Heatsink -->
+        <rect x="-8" y="-60" width="76" height="110" rx="4" />
+        
+        <!-- Front Fascia (Green Cutout) -->
+        <rect x="-2" y="-54" width="64" height="98" rx="2" fill="#6dac20" />
+
+        <!-- Top Display / LED Bar -->
+        <rect x="14" y="-45" width="32" height="12" rx="2" />
+
+        <!-- Fronius Center Circle / Lüfter -->
+        <circle cx="30" cy="0" r="22" />
+        <circle cx="30" cy="0" r="15" fill="#6dac20" />
+        <circle cx="30" cy="0" r="6" />
+      </g>
+
+      <!-- Wächter Shield (Guardian Overlay, Unten Rechts) -->
+      <g transform="translate(56, 44)">
+        <!-- Green Separation Outline -->
+        <path d="M 0 -22 L 20 -15 L 20 5 C 20 18 10 28 0 35 C -10 28 -20 18 -20 5 L -20 -15 Z" fill="#6dac20" stroke="#6dac20" stroke-width="8" stroke-linejoin="round" />
+        <!-- White Shield Body -->
+        <path d="M 0 -22 L 20 -15 L 20 5 C 20 18 10 28 0 35 C -10 28 -20 18 -20 5 Z" />
+        <!-- Checkmark Inside Shield -->
+        <path d="M -8 2 L -2 8 L 10 -4" fill="none" stroke="#6dac20" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+      </g>
+
+    </g>
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+  </g>
+
+  <!-- Typography -->
+  <text x="256" y="388" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="27" letter-spacing="0.5">Fronius Wächter</text>
+  <text x="256" y="424" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="20" letter-spacing="3">LOXBERRY</text>
+</svg>
