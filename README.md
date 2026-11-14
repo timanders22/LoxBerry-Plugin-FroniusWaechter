@@ -1,6 +1,18 @@
 # Fronius-Wächter
 
-Version 0.9.2 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+Version 0.9.3 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+
+## Neu in 0.9.3
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen nach der gemeinsamen Vorlage:** Die Knöpfe im Reiter *Einstellungen* arbeiten jetzt mit demselben Sicherungsmodul (1.2.2) wie die übrigen Plugins dieser Reihe. Für den Anwender ändert sich:
+  - Der Knopf „Einstellungen zurückspielen“ wirkt nur mit dem Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“, ab Werk aus. Ohne ihn wird die Datei nicht gelesen und nichts geändert, und die Meldung sagt es.
+  - Die Sicherungsdatei trägt im Kopf das Kennzeichen `LoxBerry-Plugin-FroniusWaechter` (`_plugin`) und die Fassung (`_fassung`). Bis 0.9.2 stand dort „froniuswaechter“ mit der Fassung dahinter; solche Sicherungen werden weiter angenommen. Eine Datei eines anderen Plugins und eine Datei ohne Kennzeichen werden als Ganzes abgewiesen; bis 0.9.2 wurden sie angenommen, wenn ihre Schlüssel passten.
+  - Eine Einstellung, die diese Fassung nicht kennt, wird nicht übernommen und mit ihrem Namen gemeldet, nie mit ihrem Wert; die übrigen werden zurückgespielt. Bis 0.9.2 wies ein unbekannter Name die ganze Datei ab.
+  - Ein leerer Wert in der Sicherung überschreibt keinen bestehenden; der bisherige Wert bleibt, und die Meldung nennt den Namen. Bis 0.9.2 wies etwa ein leeres MQTT-Präfix die ganze Datei ab.
+  - Wie bisher: Eine Datei mit einem unzulässigen Wert ändert gar nichts, alle Beanstandungen werden genannt, die Zweitschrift neben dem Konfigurationsordner zieht mit, und die Meldung sagt, was mit dem Dienst geschieht. Die Datei darf jetzt bis 256 KB groß sein (bis 0.9.2: 64 KB), wie in allen Plugins dieser Reihe.
+- Die Fassung im Kopf der Sicherungsdatei kommt aus der Plugin-Datenbank des LoxBerry bzw. der `plugin.cfg`. Die feste Fassungsnummer im Code (Titelzeile der Oberfläche, Selbsttest, Stand des letzten Laufs, Kennung beim Abruf der Solar API) stand in diesem Ordner noch auf 0.9.2 und ist auf 0.9.3 berichtigt.
+- Der Selbsttest prüft 42 Fälle (0.9.2: 39); neu sind die Fälle zum Kennzeichen, zu einer Sicherung aus 0.9.2 und zu einem unbekannten Schlüssel.
+- Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, der über einen Webserver die echten Knöpfe drückt; am Gerät nicht gemessen.
 
 ## Neu in 0.9.2
 

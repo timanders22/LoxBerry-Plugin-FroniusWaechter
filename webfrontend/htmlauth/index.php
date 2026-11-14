@@ -188,9 +188,9 @@ if ($frw_post && isset($_POST['mqtt_speichern'])) {
 
 /* ---------------- Einstellungen sichern (Download, keine Umleitung) ------- */
 if ($frw_post && isset($_POST['frw_sichern'])) {
-    $frw_js = json_encode(frw_sicherung_bauen(frw_config()),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($frw_js !== false) {
+    /* 0.9.3: Kopf und Inhalt baut das gemeinsame Sicherungsmodul (frw_sicherung_bauen() -> sicherung_bauen()). */
+    $frw_js = sicherung_json(frw_sicherung_bauen(frw_config()));
+    if ($frw_js !== '') {
         while (ob_get_level() > 0) {
             @ob_end_clean();
         }
@@ -203,42 +203,53 @@ if ($frw_post && isset($_POST['frw_sichern'])) {
 }
 
 /* ---------------- Einstellungen zurueckspielen ----------------
- * is_uploaded_file() zuerst, dann die Groesse; eine halb gueltige Datei
- * aendert nichts; danach wird gesagt, was mit dem Dienst geschieht. */
+ * 0.9.3: das gemeinsame Sicherungsmodul. sicherung_eingang() prueft in jeder Linie gleich den Haken zurueck_ok
+ * (ohne ihn wird nichts gelesen und nichts geaendert), is_uploaded_file() und die Groessengrenze des Moduls
+ * (256 kB; bis 0.9.2 hier 64 kB). sicherung_zurueckspielen() liest, prueft, verwirft Unbekanntes mit Namen,
+ * laesst leere Werte den bisherigen stehen und aendert bei einer Beanstandung gar nichts. Die Schritte dieser
+ * Linie stehen in den Rueckrufen: speichern (zieht die Zweitschrift mit), nachlesen wie bis 0.9.2 und sagen,
+ * was mit dem Dienst geschieht. Die Saetze des Moduls sind maskiert; die Ausgabe hier maskiert selbst (frw_e()),
+ * deshalb werden sie vorher zurueckgewandelt. */
 if ($frw_post && isset($_POST['frw_zurueck'])) {
-    if (!isset($_FILES['frw_sicherung']) || !is_array($_FILES['frw_sicherung'])
-        || !isset($_FILES['frw_sicherung']['tmp_name']) || !is_string($_FILES['frw_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['frw_sicherung']['tmp_name'])) {
-        $frw_fehler[] = frw_t('SICH.KEINE_DATEI');
-    } elseif ((int) $_FILES['frw_sicherung']['size'] > 65536) {
-        $frw_fehler[] = frw_t('SICH.ZU_GROSS');
+    $frw_b = frw_sicherung_beschreibung();
+    list($frw_roh, $frw_ab) = sicherung_eingang($frw_b, $_POST, $_FILES, 'frw_sicherung');
+    if ($frw_ab !== null) {
+        $frw_sm = sicherung_meldungen($frw_b, $frw_ab);
     } else {
-        list($frw_neu, $frw_mangel, $frw_n) = frw_sicherung_lesen(
-            (string) @file_get_contents($_FILES['frw_sicherung']['tmp_name']));
-        if ($frw_neu === null) {
-            $frw_fehler[] = array('kopf' => frw_t('SICH.ABGELEHNT'), 'punkte' => $frw_mangel);
-        } else {
-            $frw_zweit = false;
-            if (!frw_config_speichern($frw_neu, $frw_zweit)) {
-                $frw_fehler[] = frw_t('EINST.SCHREIBFEHLER');
-            } else {
-                $frw_datei = frw_json_lesen($frw_p['cfgdatei']);
-                $frw_gleich = is_array($frw_datei);
-                foreach (array_keys(frw_vorgaben()) as $frw_k) {
-                    if ($frw_gleich && (!array_key_exists($frw_k, $frw_datei) || $frw_datei[$frw_k] !== $frw_neu[$frw_k])) {
-                        $frw_gleich = false;
-                    }
-                }
-                if ($frw_gleich) {
-                    $frw_meldung = sprintf(frw_t('SICH.UEBERNOMMEN'), $frw_n) . ' ' . frw_dienst_satz($frw_neu);
-                    if (!$frw_zweit) {
-                        $frw_hinweise[] = frw_t('SICH.ZWEIT_FEHLT');
-                    }
-                } else {
-                    $frw_fehler[] = frw_t('SICH.NICHT_WIRKSAM');
+        $frw_b['speichern'] = function ($neu) {
+            return frw_config_speichern($neu);
+        };
+        $frw_b['zweitschrift'] = function () {
+            $p = frw_paths();
+            return array($p['cfgdatei'], $p['sicherung']);
+        };
+        $frw_b['nachziehen'] = function ($neu, $jetzt) use (&$frw_fehler) {
+            /* Nachlesen wie bis 0.9.2: steht in der Datei, was gespeichert werden sollte? */
+            $d = frw_json_lesen(frw_paths()['cfgdatei']);
+            $gleich = is_array($d);
+            foreach (array_keys(frw_vorgaben()) as $k) {
+                if ($gleich && (!array_key_exists($k, $d) || $d[$k] !== $neu[$k])) {
+                    $gleich = false;
                 }
             }
+            if (!$gleich) {
+                $frw_fehler[] = frw_t('SICH.NICHT_WIRKSAM');
+            }
+            /* Der Dienst laeuft im Minutentakt aus Cron und liest die Konfiguration bei jedem Lauf; wird er mit der
+               Sicherung eingeschaltet, gilt wie beim Speichern der jetzige Zeitpunkt als Start. */
+            if (!empty($neu['dienst_ein']) && empty($jetzt['dienst_ein'])) {
+                frw_jetzt_merken();
+            }
+            return array(frw_dienst_satz($neu));
+        };
+        $frw_b['log'] = 'frw_log';
+        $frw_sm = sicherung_meldungen($frw_b, sicherung_zurueckspielen($frw_b, $frw_roh));
+        if ($frw_sm['hinweise']) {
+            $frw_meldung = html_entity_decode(implode(' ', $frw_sm['hinweise']), ENT_QUOTES, 'UTF-8');
         }
+    }
+    foreach ($frw_sm['fehler'] as $frw_x) {
+        $frw_fehler[] = html_entity_decode($frw_x, ENT_QUOTES, 'UTF-8');
     }
     $frw_tab = 'tab-settings';
 }
@@ -560,6 +571,7 @@ if (!$frw_dms) {
 		<input data-role="none" type="hidden" name="activetab" value="tab-settings">
 		<input data-role="none" type="hidden" name="formular" value="zurueck">
 		<input data-role="none" type="file" name="frw_sicherung" accept=".json">
+		<?= sicherung_haken_zeile(frw_sicherung_beschreibung()) ?>
 		<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="frw_zurueck" value="1"><?= frw_e(frw_t('SICH.K_ZURUECK')) ?></button>
 	</form>
 </div>

@@ -22,10 +22,15 @@
  * (c) Fronius-Waechter Plugin Authors - MIT-Lizenz
  */
 
+/* 0.9.3: Das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn
+ * 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den anderen Linien. Die
+ * Beschreibung dieser Linie steht in frw_sicherung_beschreibung(). */
+require_once __DIR__ . '/sicherung.php';
+
 /* ------------------------------------------------------------------
  * Grenzen - jede steht genau hier (Regeln/04).
  * ------------------------------------------------------------------ */
-define('FRW_FASSUNG', '0.9.2');
+define('FRW_FASSUNG', '0.9.3');
 define('FRW_DM_MAX', 4);
 /* Takt: Vorgabe 300 s. Status- und Fehlercode, Energiestaende und
    Modulwerte aendern sich im Minutenbereich nicht in einer Weise, die eine
@@ -602,68 +607,91 @@ function frw_dm_liste(array $c)
 }
 
 /* ------------------------------------------------------------------
- * Sichern und Zurueckspielen (Muster WOLF ISM NG 3.0.8, Regeln/05)
+ * Sichern und Zurueckspielen: das gemeinsame Sicherungsmodul (seit 0.9.3)
  * ------------------------------------------------------------------ */
+
+/**
+ * 0.9.3: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul
+ * (Auftrag des Hausherrn 12.11.2026, Welle 1, Gruppe 2b). Bis 0.9.2 stand hier
+ * eine eigene Lese- und Bauschleife (Muster WOLF ISM NG 3.0.8). Gemessen
+ * 14.11.2026 mit Werkzeuge/sicherung_pruefstand.py an 0.9.2: ein unbekannter
+ * Schluessel wies die ganze Datei ab, ein leerer Wert ebenso (statt den
+ * bisherigen stehen zu lassen), eine Datei mit fremdem oder ohne Kennzeichen
+ * wurde angenommen, und der Knopf "Einstellungen zurueckspielen" wirkte ohne
+ * Haken. Seither gelten die Regeln des Moduls wie in den anderen Linien.
+ *
+ * Das Kennzeichen war bis 0.9.2 "froniuswaechter <Fassung>" - mit
+ * Leerzeichen und Fassung keine Namensform, die das Modul annimmt. Seit 0.9.3
+ * traegt die Datei den Namen des Repositorys (Regeln/05, Punkt 1); das alte
+ * Kennzeichen wird ueber 'kennzeichen_frueher_muster' weiter angenommen. Beide
+ * Fassungen davor (0.9.1, 0.9.2) schrieben es und alle Schluessel von
+ * frw_vorgaben() (unveraendert seit 0.9.1, gemessen) - deshalb kein
+ * Uebersetzer und kein 'fehlt' => 'behalten'.
+ *
+ * Jeder Wert geht durch frw_wert_pruefen() wie bisher - dieselbe Pruefung wie
+ * Formular und Lesefunktion; 'wandeln' je Schluessel nimmt ihre Normalform
+ * (Zahl, Schalter 0/1). Die Fassung im Kopf kommt aus der Plugin-Datenbank
+ * bzw. der plugin.cfg, nicht aus FRW_FASSUNG.
+ */
+function frw_sicherung_beschreibung()
+{
+    $p = frw_paths();
+    $schluessel = array();
+    foreach (array_keys(frw_vorgaben()) as $k) {
+        $schluessel[$k] = array('wandeln' => function ($w) use ($k) {
+            $e = frw_wert_pruefen($k, $w);
+            return $e[1];
+        });
+    }
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-FroniusWaechter',
+        'kennzeichen_frueher_muster' => '/^froniuswaechter [0-9]+(\.[0-9]+)+\z/',
+        'hinweis' => frw_t('SICH.KOPF_HINWEIS'),
+        'kopf' => array('_hinweis2' => frw_t('SICH.KOPF_HINWEIS2')),
+        'vorgaben' => frw_vorgaben(),
+        'schluessel' => $schluessel,
+        'pruefen' => function ($k, $w) {
+            $e = frw_wert_pruefen($k, $w);
+            return $e[0] ? '' : frw_e($e[2]);
+        },
+        'jetzt' => function () {
+            $c = frw_config(false);
+            return is_array($c) ? $c : frw_vorgaben();
+        },
+        't' => 'frw_t',
+        'e' => 'frw_e',
+        'home' => $p['lbhome'],
+        'ordner' => $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+    );
+}
+
+/** Die Sicherung als Feld (Kopf mit _plugin, _fassung, _stand und alle Schluessel von frw_vorgaben()). */
 function frw_sicherung_bauen(array $c)
 {
-    $kopf = array(
-        '_hinweis' => frw_t('SICH.KOPF_HINWEIS'),
-        '_hinweis2' => frw_t('SICH.KOPF_HINWEIS2'),
-        '_plugin'  => 'froniuswaechter ' . FRW_FASSUNG,
-        '_stand'   => date('Y-m-d H:i'),
-    );
-    $daten = array();
-    foreach (frw_vorgaben() as $k => $v) {
-        $daten[$k] = array_key_exists($k, $c) ? $c[$k] : $v;
-    }
-    return $kopf + $daten;
+    return sicherung_bauen(frw_sicherung_beschreibung(), $c);
 }
 
 /**
- * Rueckgabe array(neu|null, beanstandungen, anzahl). Eine halb gueltige
- * Datei aendert nichts; alle Beanstandungen werden gesammelt; fremde und
- * fehlende Schluessel sind Beanstandungen.
+ * Eine Sicherung lesen und pruefen, ohne zu schreiben (Selbsttest). Rueckgabe
+ * wie bis 0.9.2: array(neu|null, Beanstandungen, Anzahl); das volle Ergebnis
+ * des Moduls steht in $r. Die Beanstandungen sind maskiert (Modul).
  */
-function frw_sicherung_lesen($roh)
+function frw_sicherung_lesen($roh, &$r = null, $jetzt = null)
 {
+    if (!is_array($jetzt)) {
+        $jetzt = frw_config(false);
+        if (!is_array($jetzt)) {
+            $jetzt = frw_vorgaben();
+        }
+    }
+    $b = frw_sicherung_beschreibung();
+    $r = sicherung_lesen($b, (string) $roh, $jetzt);
     $mangel = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten) || ($daten && array_keys($daten) === range(0, count($daten) - 1))) {
-        return array(null, array(frw_t('SICH.KEIN_JSON')), 0);
+    foreach ($r['beanstandet'] as $x) {
+        $mangel[] = $x['text'] !== '' ? $x['text'] : sprintf(sicherung_t('K_WERT', $b), frw_e($x['name']));
     }
-    $neu = frw_vorgaben();
-    $bekannt = array_keys($neu);
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        $k = (string) $k;
-        if ($k !== '' && $k[0] === '_') {
-            continue;
-        }
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(frw_t('SICH.FREMD'), frw_kurz($k, 40));
-            continue;
-        }
-        list($ok, $wert, $grund) = frw_wert_pruefen($k, $w);
-        if (!$ok) {
-            $mangel[] = $grund;
-            continue;
-        }
-        $neu[$k] = $wert;
-        $anzahl++;
-    }
-    $fehlend = array();
-    foreach ($bekannt as $k) {
-        if (!array_key_exists($k, $daten)) {
-            $fehlend[] = $k;
-        }
-    }
-    if ($fehlend) {
-        $mangel[] = sprintf(frw_t('SICH.FEHLEND'), count($fehlend), implode(', ', $fehlend));
-    }
-    if ($anzahl === 0 && !$mangel) {
-        $mangel[] = frw_t('SICH.LEER');
-    }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    return array($r['ok'] ? $r['neu'] : null, $mangel, (int) $r['anzahl']);
 }
 
 /* ------------------------------------------------------------------
@@ -2343,14 +2371,31 @@ function frw_selbsttest()
     $pruef(count(frw_meldungen_ermitteln($alt, $neu, $cm)) === 1, 'Meldung Stoerung eingeschaltet: genau eine Meldung beim Wechsel');
     $pruef(!frw_meldungen_ermitteln(array(), $neu, $cm), 'Erster Lauf ohne alten Stand: keine Meldung');
 
-    list($sn, $sm) = frw_sicherung_lesen(json_encode(frw_sicherung_bauen(frw_vorgaben())));
-    $pruef($sn !== null && !$sm, 'Sicherung: eigene Datei wird angenommen');
-    $halb = frw_sicherung_bauen(frw_vorgaben());
+    /* 0.9.3: gemeinsames Sicherungsmodul - die Faelle gegen die Vorgaben als geltenden Stand. */
+    $vg0 = frw_vorgaben();
+    $eigen = frw_sicherung_bauen($vg0);
+    list($sn, $sm) = frw_sicherung_lesen(json_encode($eigen), $sr, $vg0);
+    $pruef($sn !== null && !$sm && $eigen['_plugin'] === 'LoxBerry-Plugin-FroniusWaechter',
+        'Sicherung: eigene Datei mit Kennzeichen LoxBerry-Plugin-FroniusWaechter wird angenommen');
+    $halb = $eigen;
     $halb['takt_s'] = 5;
-    list($hn, $hm) = frw_sicherung_lesen(json_encode($halb));
-    $pruef($hn === null && count($hm) === 1, 'Sicherung halb gueltig (takt_s 5): abgelehnt mit einer Beanstandung');
-    list($fn, $fm) = frw_sicherung_lesen('{"BASE.FRITZBOX":"x","USER1.MACS":"y"}');
-    $pruef($fn === null && count($fm) >= 3, 'Sicherung fremd: abgelehnt, alle Beanstandungen gesammelt (' . count($fm) . ')');
+    $halb['timeout_s'] = 99;
+    list($hn, $hm) = frw_sicherung_lesen(json_encode($halb), $sr, $vg0);
+    $pruef($hn === null && count($hm) === 2, 'Sicherung halb gueltig (takt_s 5, timeout_s 99): abgelehnt, beide Beanstandungen gesammelt');
+    $alt = $eigen;
+    $alt['_plugin'] = 'froniuswaechter 0.9.2';
+    list($an, $am) = frw_sicherung_lesen(json_encode($alt), $sr, $vg0);
+    $pruef($an !== null && !$am, 'Sicherung bis 0.9.2 (Kennzeichen "froniuswaechter 0.9.2"): angenommen');
+    list($fn, $fm) = frw_sicherung_lesen('{"BASE.FRITZBOX":"x","USER1.MACS":"y"}', $sr, $vg0);
+    $pruef($fn === null && $sr['fremd'] === 'ohne', 'Sicherung ohne Kennzeichen: als Ganzes abgewiesen');
+    $fr = $eigen;
+    $fr['_plugin'] = 'LoxBerry-Plugin-Anderes';
+    list($frn, $frm) = frw_sicherung_lesen(json_encode($fr), $sr, $vg0);
+    $pruef($frn === null && $sr['fremd'] === 'kennzeichen', 'Sicherung mit fremdem Kennzeichen: als Ganzes abgewiesen');
+    $un = $eigen;
+    $un['zz_unbekannt'] = 1;
+    list($un_n, $un_m) = frw_sicherung_lesen(json_encode($un), $sr, $vg0);
+    $pruef($un_n !== null && $sr['verworfen'] === array('zz_unbekannt'), 'Unbekannter Schluessel: verworfen und genannt, Datei angenommen');
     $pruef(frw_adresse_pruefen('192.0.2.31; rm -rf /') === '' && frw_adresse_pruefen('http://192.0.2.31') === ''
         && frw_adresse_pruefen('192.0.2.31:8080') === '192.0.2.31:8080' && frw_adresse_pruefen('256.1.1.1') === '', 'Adresspruefung: Befehl, Schema und 256 abgewiesen, Port angenommen');
     $vg = frw_vorgaben();
