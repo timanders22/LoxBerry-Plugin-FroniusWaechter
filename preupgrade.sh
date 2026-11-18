@@ -23,7 +23,7 @@ fi
 # Als Erstes die Upgrade-Marke: preinstall.sh und postinstall.sh erkennen eine
 # Aktualisierung allein an ihr; der Dienst ruht, solange sie juenger als 15 min ist.
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
-if date '+%Y-%m-%d %H:%M:%S' > "$MARKE" 2>/dev/null; then
+if date +%s > "$MARKE" 2>/dev/null; then
     echo "<OK> Upgrade-Marke gesetzt: $MARKE"
 else
     rm -f "$MARKE" 2>/dev/null

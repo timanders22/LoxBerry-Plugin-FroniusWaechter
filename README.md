@@ -1,6 +1,11 @@
 # Fronius-Wächter
 
-Version 0.9.5 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+Version 0.9.6 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+
+## Neu in 0.9.6
+
+- **Geändert – Takt ruht während des Updates schon in der Schale:** Der Minutentakt endet bei laufender Aktualisierung jetzt, bevor PHP startet. Bis 0.9.5 hielt erst die Bibliothek an; der Takt legte vorher nur `cron.err` an, Daten gingen nicht verloren. Dazu schreibt `preupgrade.sh` die Marke jetzt als Unixzeit statt als Datum, wie alle anderen Plugins; mit dem Datum hätte die neue Abfrage die Marke nie erkannt. Ist die Marke eine Stunde oder älter, liegt sie in der Zukunft oder enthält sie keine Unixzeit, gilt sie nicht, damit eine abgebrochene Aktualisierung den Takt nicht dauerhaft stilllegt. Alle Plugins dieser Reihe fragen die Marke mit demselben Block ab. Es wirkt schon beim Update auf diese Fassung, denn der Installer legt die Takte der neuen Fassung vor der Lücke an, und das `preupgrade.sh` der neuen Fassung legt die Marke an. Gemessen in einer Nachstellung des Update-Ablaufs auf dem Arbeitsrechner (WSL); am Gerät nicht gemessen.
+- **Geändert – Upgrade-Marke in der Bibliothek:** `frw_upgrade_laeuft()` folgt der Hausregel: Inhalt Unixzeit, nicht aus der Zukunft, jünger als 3600 s. Bisher zählte die Änderungszeit mit Betrag und 900 s, eine Marke aus der Zukunft galt. Auf dem Arbeitsrechner nur auf Syntax geprüft (PHP 7.4 und 8.4, `bash -n`); die Wirkung ist weder dort noch am Gerät gemessen.
 
 ## Neu in 0.9.5
 

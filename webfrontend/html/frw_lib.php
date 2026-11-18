@@ -53,7 +53,7 @@ define('FRW_PAUSE_S', 4);
 define('FRW_MAX_ANTWORT', 262144);
 define('FRW_GERAETE_NEU', 3600);
 define('FRW_VOLLVERSAND', 1800);
-define('FRW_MARKE_FRIST', 900);
+define('FRW_MARKE_FRIST', 3600);   // Frage 74 (18.11.2026): Hausregel 3600 s statt 900 s
 define('FRW_AUSFALL_MELDEN', 3);
 define('FRW_MQTT_PRAEFIX_VORGABE', 'froniuswaechter');
 define('FRW_STREUUNG_MAX', 100);
@@ -489,7 +489,17 @@ function frw_upgrade_laeuft()
     }
     $marke = dirname($p['datadir']) . '/' . $p['plugin'] . '.upgrade_laeuft';
     clearstatcache(true, $marke);
-    return is_file($marke) && abs(time() - (int) @filemtime($marke)) < FRW_MARKE_FRIST;
+    // Frage 74 (18.11.2026): Hausregel - Inhalt Unixzeit, nicht aus der Zukunft, juenger als FRW_MARKE_FRIST.
+    // Bis zur Vorfassung: Aenderungszeit mit abs() und 900 s.
+    if (!is_file($marke)) {
+        return false;
+    }
+    $t = trim((string) @file_get_contents($marke));
+    if (!preg_match('/^[0-9]{1,12}$/', $t)) {
+        return false;
+    }
+    $alter = time() - (int) $t;
+    return $alter >= 0 && $alter < FRW_MARKE_FRIST;
 }
 
 function frw_token_erzeugen()
