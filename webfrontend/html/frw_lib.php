@@ -654,9 +654,13 @@ function frw_sicherung_beschreibung()
             $e = frw_wert_pruefen($k, $w);
             return $e[0] ? '' : frw_e($e[2]);
         },
+        // 0.9.4 (Modul 1.2.9, Bauform vom 15.11.2026): das Modul sieht die geltende Konfiguration ungefiltert -
+        // frw_config() liefert nur die Vorgabenschluessel; was die Datei sonst traegt, haengt hier an, damit das
+        // Zurueckspielen es beim Namen nennt, statt es still wegfallen zu lassen.
         'jetzt' => function () {
             $c = frw_config(false);
-            return is_array($c) ? $c : frw_vorgaben();
+            $w = frw_json_lesen(frw_paths()['cfgdatei']);
+            return (is_array($c) ? $c : frw_vorgaben()) + (is_array($w) ? $w : array());
         },
         't' => 'frw_t',
         'e' => 'frw_e',
