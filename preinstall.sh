@@ -22,7 +22,7 @@ if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugi
     exit 0
 fi
 case "$PFOLDER" in
-    ''|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts beiseitegelegt."; exit 0 ;;
+    ''|.|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts beiseitegelegt."; exit 0 ;;
 esac
 [ -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" ] && exit 0
 

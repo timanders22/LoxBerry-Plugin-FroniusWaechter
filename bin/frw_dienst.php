@@ -14,6 +14,8 @@
  *                                    schreibt nichts
  *   php frw_dienst.php --vorgaben    die Vorgaben als JSON (Gegenstelle fuer
  *                                    die Pruefzeile im Reiter Test)
+ *   php frw_dienst.php --mqtt-leeren die zurueckbehaltenen Themen leeren
+ *                                    (uninstall/uninstall, seit 0.9.7)
  *
  * (c) Fronius-Waechter Plugin Authors - MIT-Lizenz
  */
@@ -63,15 +65,18 @@ if ($frw_arg === '--selbsttest') {
     if ($frw_gezaehlt !== $frw_faelle || $frw_rot !== $frw_fehl) {
         echo 'Zaehlung uneinig: ' . $frw_gezaehlt . '/' . $frw_rot . ' Zeilen gegen ' . $frw_faelle . '/' . $frw_fehl . "\n";
     }
-    echo 'Rechenkern Fronius-Waechter ' . FRW_FASSUNG . ': ' . $frw_gezaehlt . ' Faelle geprueft, ' . $frw_rot . " Fehlschlaege.\n";
+    echo 'Rechenkern Fronius-Waechter ' . (frw_fassung() !== '' ? frw_fassung() : '(Fassung nicht feststellbar)') . ': ' . $frw_gezaehlt . ' Faelle geprueft, ' . $frw_rot . " Fehlschlaege.\n";
     exit($frw_rot > 0 ? 1 : 0);
 }
 if ($frw_arg === '--vorgaben') {
     echo json_encode(frw_vorgaben()) . "\n";
     exit(0);
 }
+if ($frw_arg === '--mqtt-leeren') {
+    exit(frw_mqtt_leeren());
+}
 if ($frw_arg !== '') {
-    fwrite(STDERR, "Unbekanntes Argument. Erlaubt: --selbsttest, --vorgaben\n");
+    fwrite(STDERR, "Unbekanntes Argument. Erlaubt: --selbsttest, --vorgaben, --mqtt-leeren\n");
     exit(2);
 }
 

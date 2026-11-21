@@ -25,4 +25,9 @@ mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
 ERR="REPLACELBPLOGDIR/cron.err"
 touch "$ERR" 2>/dev/null
 [ -f "$ERR" ] && [ -w "$ERR" ] || ERR=/dev/null
+# 0.9.7 (fremder Pruefer F5; Bauart Abfahrts-Assistent 1.6.31, Regeln/06): frw_log() kappt nur froniuswaechter.log.
+# cron.err wuchs bis 0.9.6 ungekappt auf der RAM-Scheibe; ueber 256 kB bleiben die letzten 300 Zeilen.
+if [ "$ERR" != /dev/null ] && [ "$(stat -c %s "$ERR" 2>/dev/null || echo 0)" -gt 262144 ]; then
+    tail -n 300 "$ERR" > "$ERR.neu" 2>/dev/null && mv -f "$ERR.neu" "$ERR"
+fi
 php "REPLACELBPBINDIR/frw_dienst.php" >/dev/null 2>>"$ERR"

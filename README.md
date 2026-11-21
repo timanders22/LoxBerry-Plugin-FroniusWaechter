@@ -1,6 +1,20 @@
 # Fronius-Wächter
 
-Version 0.9.6 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+Version 0.9.7 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+
+## Neu in 0.9.7
+
+- Die Kopfzeile zeigt jetzt die installierte Fassung in derselben Form wie alle Plugins (bisher die eingetragene Konstante FRW_FASSUNG, angezeigt wurde 0.9.3).
+- **Geändert – Fassung auch in Kennung, Stand und Selbsttest:** Die Kennung beim Abruf der Solar API (`User-Agent`), der Stand des letzten Laufs und die Schlusszeile des Selbsttests nennen die Fassung jetzt aus demselben gemeinsamen Stück wie die Kopfzeile (`fassung.php`). Bis 0.9.6 stand dort fest 0.9.3. Findet sich keine Fassung, steht keine Nummer da statt einer geratenen.
+- **Neu – Stand der Abrufe über ein Update behalten (ab Werk aus):** Mit dem Haken im Reiter *Einstellungen* legt das Update den Stand neben den Datenordner und holt ihn danach zurück. Ohne ihn beginnt der Stand wie bisher neu: der erste Lauf nach dem Update meldet nichts, und eine Störung, die während des Updates beginnt, wird nicht gemeldet, solange sie anhält.
+- **Neu – kompakte Abfrage als JSON (ab Werk aus):** `index.php?aktion=json` liefert je Datamanager Zustand und Alter, je Wechselrichter Status, Fehlercode und Störung, je Speicher Ladestand, Zahl der Module, Streuung des Ladestands und größte Zellspannungsdifferenz – etwa für das Dashboard. Offen wie die Abfrage je Datamanager und nur lesend; ohne den Haken antwortet der Endpunkt wie bisher.
+- **Geändert – die Deinstallation leert die zurückbehaltenen MQTT-Themen:** Status, Fehlercode, Störung, Modulzustand, Zahl der Module und die Warnungen der Schwellen gehen mit leerer Nutzlast über den UDP-Eingang des Gateways hinaus, dreimal. Bis 0.9.6 blieben sie im Broker stehen. Nachgelesen wird nicht; was stehen bleibt, lässt sich mit `mosquitto_pub -r -n -t <thema>` löschen.
+- **Berichtigt – Deinstallation eines anderen Plugins:** LoxBerry ruft beim Deinstallieren jedes Deinstallationsskript auf, dessen Name mit dem Namen des deinstallierten Plugins beginnt. Bis 0.9.6 hätte die Deinstallation eines Plugins namens „fronius“ über dieses Skript dessen Datenordner und Sicherung gelöscht; bei einem fremden Namen tut das Skript jetzt nichts.
+- **Berichtigt – Installationsskripte:** `postinstall.sh` und `postupgrade.sh` erkennen die LoxBerry-Wurzel jetzt wie `preinstall.sh` und `preupgrade.sh`; von Hand aus einem ausgepackten Archiv gestartet, legten sie bisher Ordner in einem fremden Verzeichnis an. Die Zweitschrift wird beim Update geprüft zurückgespielt (Kopie, Vergleich, dann an ihren Platz); bisher hing die Erfolgsmeldung nur am Rückgabewert des Kopierens. Ein Ordnername „.“ wird in allen Skripten abgewiesen.
+- **Berichtigt – `cron.err` wird gekappt:** über 256 kB bleiben die letzten 300 Zeilen; bisher wuchs die Datei auf der RAM-Scheibe ohne Grenze.
+- **Berichtigt – Oberfläche:** PHP-Meldungen gehen nicht mehr in die Seite; eine Warnung hätte die Umleitung nach dem Speichern und die Downloads (Sicherung, Importvorlage) verdorben. Nach einer Beanstandung stehen die eingetippten Werte wieder im Formular, das beanstandete Feld ist rot umrandet; gespeichert wird wie bisher nichts.
+- **Neu – Sprachansagen (ab Werk aus):** Eine Störung eines Wechselrichters (Statuscode 10 oder ein Fehlercode, der laut Fronius-Unterlage keine regelmäßige Meldung ist) und das Überschreiten der Schwelle für die Zellspannungsdifferenz können über die Lautsprecher des Hauses angesagt werden – mit dem gemeinsamen Sprachmodul (`sprachausgabe.php`) wie in den übrigen Plugins: dieselben Ausgabearten und Ziele, Nachtruhe, Sperre, der Schalter „Ansagen aus“ (`haus/ansage/ruhe`) und eine Testansage im Reiter *Test*. Jeder Eintritt wird einmal angesagt, das Ende nicht; nach einem unvollständigen Abruf wird nichts angesagt. Beide Anlässe sind ab Werk aus. Die Sicherung enthält den Block der Sprachausgabe ohne Sprechtoken.
+- Der Selbsttest prüft 50 Fälle (0.9.6: 42). Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4, die Installationsskripte in einer Nachstellung unter WSL; am Gerät nicht gemessen.
 
 ## Neu in 0.9.6
 
@@ -52,7 +66,7 @@ Das Plugin schreibt nie in einen Wechselrichter, benutzt kein Modbus und steuert
 
 ## Ab Werk aus
 
-Der Dienst, alle Meldungen, alle Schwellen und die Speichermodule als Sendegruppe. Solange der Dienst aus ist, wird kein Datamanager abgefragt.
+Der Dienst, alle Meldungen, alle Sprachansagen, alle Schwellen, die Speichermodule als Sendegruppe, die Abfrage als JSON und das Behalten des Stands über ein Update. Solange der Dienst aus ist, wird kein Datamanager abgefragt.
 
 ## Einrichtung
 
@@ -91,6 +105,8 @@ Regelweg ist das MQTT-Gateway des LoxBerry (UDP-Eingang, Befehle `publish` und `
 ## HTTP-Endpunkt
 
 `http://<loxberry>/plugins/froniuswaechter/index.php?aktion=status&dm=N` liefert eine Zeile `FRWN;OK=..;ALTER=..;ZAEHLER=..;WR1_STATUS=..;…`, Suchtexte mit Semikolon davor (`\i;WR1_STATUS=\i\v`). Vor dem ersten Abruf antwortet der Endpunkt mit HTTP 503. Abfragen sind offen. Mit Aktionstoken: `?aktion=jetzt&token=…` (beim nächsten Minutenlauf abfragen) und `?selftest=1&token=…`.
+
+Mit dem Haken „Kompakte Abfrage als JSON erlauben“ (ab Werk aus) liefert `?aktion=json` den Stand aller Datamanager als ein JSON-Objekt (Vertrag 1): `plugin`, `vertrag`, `ts`, `dienst`, `ok` und je Datamanager unter `dm` die Felder `ok`, `alter`, `erreichbar`, `ausfall_folge`, `wr` (je Wechselrichter `status`, `fehler`, `stoerung`) und `sp` (je Speicher `soc`, `anzahl`, `soc_streuung`, `u_diff_mv`, mit Schwelle über 0 auch `warn_streuung`, `warn_zellen`). Ein Wert, den das Gerät nicht geliefert hat, fehlt. Vor dem ersten Abruf antwortet die Abfrage mit HTTP 503 und `grund`.
 
 ## Bedeutung der Codes und ihre Quellen
 

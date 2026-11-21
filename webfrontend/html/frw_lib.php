@@ -26,11 +26,25 @@
  * 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den anderen Linien. Die
  * Beschreibung dieser Linie steht in frw_sicherung_beschreibung(). */
 require_once __DIR__ . '/sicherung.php';
+/* 0.9.7 (Erweiterung E1): das gemeinsame Sprachmodul (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, byte-gleich,
+ * gemeinsam_pruefen.py). Sprachansagen bei einer Stoerung und beim Ueberschreiten der Zellspannungsschwelle - beide
+ * Anlaesse ab Werk aus; Nachtruhe, Sperre und der Schalter "Ansagen aus" (haus/ansage/ruhe) stehen im Modul. */
+require_once __DIR__ . '/sprachausgabe.php';
 
 /* ------------------------------------------------------------------
  * Grenzen - jede steht genau hier (Regeln/04).
  * ------------------------------------------------------------------ */
-define('FRW_FASSUNG', '0.9.3');
+/* 0.9.7 (fremder Pruefer F9): die Fassung kommt aus dem gemeinsamen Stueck fassung.php (Abschrift neben dieser Datei,
+   byte-gleich mit Werkzeuge/gemeinsam/fassung.php), wie die Kopfzeile seit 21.11.2026. Bis 0.9.6 stand hier die feste
+   Konstante FRW_FASSUNG = '0.9.3' (User-Agent, stand.json, Schlusszeile des Selbsttests), seit 0.9.4 nicht nachgezogen.
+   Findet keine Stufe eine Fassung, ist sie '' - nie eine geratene Nummer. */
+require_once __DIR__ . '/fassung.php';
+
+function frw_fassung()
+{
+    return plugin_fassung(__DIR__);
+}
+
 define('FRW_DM_MAX', 4);
 /* Takt: Vorgabe 300 s. Status- und Fehlercode, Energiestaende und
    Modulwerte aendern sich im Minutenbereich nicht in einer Weise, die eine
@@ -136,6 +150,13 @@ function frw_vorgaben()
         'mqtt_ein'         => 1,
         'mqtt_praefix'     => FRW_MQTT_PRAEFIX_VORGABE,
         'eb_anzeigen'      => 0,
+        'ansage_stoerung'  => 0,   // 0.9.7 (E1): Stoerung eines Wechselrichters ansagen
+        'ansage_zellen'    => 0,   // 0.9.7 (E1): Zellspannungsschwelle ansagen
+        'tts'              => ansage_werk_block(),        // Block des Moduls (Bauart der Linien, Hausentscheidung 01.11.2026)
+        'ansage_regeln'    => ansage_regeln_vorgaben(),   // Nachtruhe, Sperre, Tafel, HomePod
+        'ansage_token_herkunft' => array(),               // Vermerk des Moduls, nie aus einer Sicherung
+        'json_ein'         => 0,   // 0.9.7 (E3): kompakte Abfrage aktion=json
+        'stand_retten'     => 0,   // 0.9.7 (F11): Stand ueber ein Update behalten
     );
 }
 
@@ -143,7 +164,7 @@ function frw_vorgaben()
 function frw_schalter_schluessel()
 {
     return array('dienst_ein', 'gruppe_wr', 'gruppe_energie', 'gruppe_speicher', 'meldung_stoerung',
-                 'meldung_ausfall', 'meldung_speicher', 'mqtt_ein', 'eb_anzeigen');
+                 'meldung_ausfall', 'meldung_speicher', 'mqtt_ein', 'eb_anzeigen', 'ansage_stoerung', 'ansage_zellen', 'json_ein', 'stand_retten');
 }
 
 /* ------------------------------------------------------------------
@@ -557,6 +578,17 @@ function frw_adresse_pruefen($a)
  */
 function frw_wert_pruefen($k, $w)
 {
+    /* 0.9.7 (E1): die Bloecke der Sprachausgabe. tts und der Vermerk sind Felder des Moduls (es prueft sie beim
+       Sprechen und beim Zurueckspielen, Bauart Pumpenwacht 1.0.27); die Regeln prueft ansage_regeln_wert(). */
+    if ($k === 'tts' || $k === 'ansage_token_herkunft') {
+        return is_array($w) ? array(true, $w, '') : array(false, null, sprintf(frw_t('SICH.WERT_FORM'), $k));
+    }
+    if ($k === 'ansage_regeln') {
+        $g = '';
+        $r = ansage_regeln_wert($w, $g);
+        return $r !== null ? array(true, $r, '')
+            : array(false, null, sprintf(frw_t('DURCHSAGE.SICH_WERT'), ansage_kennung_text($g !== '' ? $g : 'M_R_BLOCK', frw_ansage_k())));
+    }
     if (is_array($w) || is_object($w) || $w === null) {
         return array(false, null, sprintf(frw_t('SICH.WERT_FORM'), $k));
     }
@@ -641,7 +673,7 @@ function frw_dm_liste(array $c)
  * Jeder Wert geht durch frw_wert_pruefen() wie bisher - dieselbe Pruefung wie
  * Formular und Lesefunktion; 'wandeln' je Schluessel nimmt ihre Normalform
  * (Zahl, Schalter 0/1). Die Fassung im Kopf kommt aus der Plugin-Datenbank
- * bzw. der plugin.cfg, nicht aus FRW_FASSUNG.
+ * bzw. der plugin.cfg, nicht aus einer festen Nummer im Code.
  */
 function frw_sicherung_beschreibung()
 {
@@ -653,9 +685,79 @@ function frw_sicherung_beschreibung()
             return $e[1];
         });
     }
+    /* 0.9.7: stand_retten und json_ein gibt es erst seit 0.9.7; eine aeltere Sicherung kennt sie nicht. Der geltende
+       Wert bleibt und wird genannt ('fehlt' => 'behalten', Regeln/05) - ohne das wies das Modul jede Sicherung bis
+       0.9.6 als unvollstaendig ab (gemessen mit dem Pruefstand, Zeilen "alt" 0.9.1/0.9.2, 21.11.2026). */
+    foreach (array('stand_retten', 'json_ein') as $k) {
+        if (isset($schluessel[$k])) {
+            $schluessel[$k]['fehlt'] = 'behalten';
+        }
+    }
+    /* 0.9.7 (E1): die Bloecke der Sprachausgabe wie in Pumpenwacht 1.0.27 - die Sprechtoken sind nie in der Datei
+       (ansage_sicherung_bereinigen()), der Vermerk ansage_token_herkunft kommt nie aus ihr; aeltere Sicherungen kennen
+       keinen der neuen Schluessel ('fehlt' => 'behalten'). */
+    $werk = array_keys(ansage_werk_block());
+    $tts_knoten = array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein')) + array('fehlt' => 'behalten'));
+    foreach (array_diff($werk, ansage_geheim()) as $n) {
+        if (!isset($tts_knoten[$n])) {
+            $tts_knoten[$n] = array('art' => 'wert', 'fehlt' => 'behalten');
+        }
+    }
+    $rg_knoten = array();
+    foreach (array_keys(ansage_regeln_vorgaben()) as $n) {
+        $rg_knoten[$n] = array('art' => 'wert', 'fehlt' => 'behalten');
+    }
+    $schluessel['tts'] = sicherung_block(array_merge($werk, ansage_geheim()), $tts_knoten) + array(
+        'fehlt' => 'behalten',
+        'sichern' => 'ansage_sicherung_bereinigen',
+        'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+            $tm = ansage_sicherung_mangel($roh);
+            if ($tm) {
+                return frw_e(sprintf(frw_t('DURCHSAGE.SICH_TOKEN'), implode(', ', $tm)));
+            }
+            $g = '';
+            if (!is_array($w) || ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, frw_ansage_modi()) === null) {
+                return frw_e(sprintf(frw_t('DURCHSAGE.SICH_WERT'), html_entity_decode(ansage_kennung_text($g, frw_ansage_k()), ENT_QUOTES, 'UTF-8')));
+            }
+            return '';
+        },
+        'wandeln' => function ($w) {
+            $g = '';
+            return ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, frw_ansage_modi());
+        });
+    $schluessel['ansage_regeln'] = sicherung_block(array_keys(ansage_regeln_vorgaben()), $rg_knoten) + array(
+        'fehlt' => 'behalten',
+        'pruefen' => function ($w) {
+            $g = '';
+            if (ansage_regeln_wert($w, $g) === null) {
+                return frw_e(sprintf(frw_t('DURCHSAGE.SICH_WERT'), html_entity_decode(ansage_kennung_text($g !== '' ? $g : 'M_R_BLOCK', frw_ansage_k()), ENT_QUOTES, 'UTF-8')));
+            }
+            return '';
+        },
+        'wandeln' => function ($w) {
+            $g = '';
+            return ansage_regeln_wert($w, $g);
+        });
+    foreach (array('ansage_stoerung', 'ansage_zellen', 'ansage_token_herkunft') as $k) {
+        $schluessel[$k]['fehlt'] = 'behalten';
+    }
     return array(
         'kennzeichen' => 'LoxBerry-Plugin-FroniusWaechter',
         'kennzeichen_frueher_muster' => '/^froniuswaechter [0-9]+(\.[0-9]+)+\z/',
+        'nie_aus_datei' => array('ansage_token_herkunft'),     // 0.9.7 (E1): Vermerk des Sprachmoduls
+        /* 0.9.7 (E1): vor dem Speichern der Block der Sprachausgabe in seiner Normalform, die geltenden Sprechtoken
+           bleiben - sie stehen nie in einer Sicherung (Bauart pw_sicherung_vorbereiten(), Pumpenwacht 1.0.25). Ohne
+           das loeschte das Zurueckspielen der eigenen Sicherung beide Token (Pruefstand, Zeile "unveraendert",
+           gemessen 21.11.2026). Behaelt der Block als Ganzes den geltenden Wert, bleibt er, wie er ist. */
+        'vorbereiten' => function ($neu, $jetzt, $r) {
+            $fb = (is_array($r) && isset($r['fehlt_behalten']) && is_array($r['fehlt_behalten'])) ? $r['fehlt_behalten'] : array();
+            if (!in_array('tts', $fb, true) && isset($neu['tts']) && is_array($neu['tts'])) {
+                $jt = (is_array($jetzt) && isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : array();
+                list($tv) = ansage_vervollstaendigen($neu['tts'], 'aus');
+                $neu['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
+            }
+            return $neu;
+        },
         'hinweis' => frw_t('SICH.KOPF_HINWEIS'),
         'kopf' => array('_hinweis2' => frw_t('SICH.KOPF_HINWEIS2')),
         'vorgaben' => frw_vorgaben(),
@@ -844,7 +946,7 @@ function frw_abrufen($adresse, $pfad, $timeout, &$info = null)
         return false;
     }
     stream_set_timeout($fp, $timeout);
-    $anfrage = 'GET ' . $pfad . " HTTP/1.0\r\nHost: " . $host . "\r\nUser-Agent: froniuswaechter/" . FRW_FASSUNG
+    $anfrage = 'GET ' . $pfad . " HTTP/1.0\r\nHost: " . $host . "\r\nUser-Agent: froniuswaechter" . (frw_fassung() !== '' ? '/' . frw_fassung() : '')
         . "\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
     @fwrite($fp, $anfrage);
     $daten = '';
@@ -1716,7 +1818,7 @@ function frw_takt($holen = null, $warte = null, $sender = null, $jetzt = null)
         @unlink($jetzt_datei);
     }
     $neu = array('ts' => $jetzt, 'zaehler' => isset($alt['zaehler']) ? ((int) $alt['zaehler'] + 1) % 1000 : 0,
-                 'fassung' => FRW_FASSUNG, 'takt_s' => (int) $c['takt_s'], 'dm' => array());
+                 'fassung' => frw_fassung(), 'takt_s' => (int) $c['takt_s'], 'dm' => array());
     $alle_ok = true;
     foreach ($liste as $n => $adr) {
         $ad = (isset($alt['dm'][$n]) && is_array($alt['dm'][$n])) ? $alt['dm'][$n] : null;
@@ -1808,9 +1910,445 @@ function frw_takt($holen = null, $warte = null, $sender = null, $jetzt = null)
             frw_log('Datamanager ' . $n . ': antwortet wieder nach ' . $vorher_folge . ' Lauf/Laeufen.');
         }
     }
+    /* 0.9.7 (E1): Sprachansagen - nur der Eintritt, gesprochen vom abgekoppelten Sender (im Selbsttest und in der
+       Probe mit $sender nur hingelegt). */
+    $ansagen = frw_ansage_lauf($neu, $c, $sender === null, $jetzt);
     flock($takt_sperre, LOCK_UN);
     fclose($takt_sperre);
-    return array('ende' => 'gelaufen', 'stand' => $neu, 'zeilen' => $zeilen, 'meldungen' => $meld);
+    return array('ende' => 'gelaufen', 'stand' => $neu, 'zeilen' => $zeilen, 'meldungen' => $meld, 'ansagen' => $ansagen);
+}
+
+/* ------------------------------------------------------------------
+ * Zurueckbehaltene Themen leeren (Deinstallation; 0.9.7, fremder Pruefer F8)
+ * ------------------------------------------------------------------ */
+
+/** Das Feld der Feldtabelle zu einem Thema ohne Praefix (dm1/wr1/status -> wr.status); '' = keines. */
+function frw_thema_feld($thema)
+{
+    $t = (string) $thema;
+    if (preg_match('#^dm[1-9]/(erreichbar|ausfall_folge|antwort_ms)\z#', $t, $m) === 1) {
+        return $m[1];
+    }
+    if (preg_match('#^dm[1-9]/wr[0-9]{1,3}/([a-z_]+)\z#', $t, $m) === 1) {
+        return 'wr.' . $m[1];
+    }
+    if (preg_match('#^dm[1-9]/sp[0-9]{1,3}/modul[0-9]{1,3}/([a-z_]+)\z#', $t, $m) === 1) {
+        return 'm.' . $m[1];
+    }
+    if (preg_match('#^dm[1-9]/sp[0-9]{1,3}/([a-z_]+)\z#', $t, $m) === 1) {
+        return 'sp.' . $m[1];
+    }
+    return '';
+}
+
+/** Die Themen, die diese Installation zurueckbehalten gesendet hat: aus dem Gedaechtnis des Stands ('letzte'), nur
+ *  Felder der Klasse zustand (frw_retain()). Was nie retained ging, bleibt unberuehrt - eine leere Nachricht darauf
+ *  loeschte nichts, kaeme in Loxone aber als leerer Wert an (Bauart Marstek Venus E, marstek_mqtt_leer_themen()). */
+function frw_mqtt_leer_themen(array $stand)
+{
+    $tab = frw_feldtabelle();
+    $aus = array();
+    $letzte = (isset($stand['letzte']) && is_array($stand['letzte'])) ? $stand['letzte'] : array();
+    foreach (array_keys($letzte) as $t) {
+        $f = frw_thema_feld($t);
+        if ($f !== '' && isset($tab[$f]) && frw_retain($f)) {
+            $aus[] = (string) $t;
+        }
+    }
+    sort($aus);
+    return $aus;
+}
+
+/**
+ * Die zurueckbehaltenen Themen leeren - fuer uninstall/uninstall (frw_dienst.php --mqtt-leeren). Ueber den
+ * UDP-Eingang des Gateways, "retain <thema> " mit leerer Nutzlast: die Form, die das Gateway als Loeschung liest
+ * (Bauart marstek_mqtt_leeren(), Marstek Venus E seit 1.1.16). Drei Runden mit 1 s Abstand, weil der Eingang unter
+ * Last Datagramme verwirft (Regeln/07). Nachgelesen wird nicht - dieses Plugin hat keinen Leseweg am Broker; die
+ * Ausgabe sagt es. Schreibt kein Protokoll, legt nichts an. $sender (Selbsttest, Probe) bekommt die Zeilen statt des
+ * Gateways. Rueckgabe 0 gesendet oder nichts zu tun, 1 Eingang nicht erreichbar, 2 nicht moeglich.
+ */
+function frw_mqtt_leeren($sender = null, $runden = 3, $pause_us = 1000000)
+{
+    $stand = frw_stand_lesen();
+    $c = frw_config(false);
+    $praefix = (isset($stand['praefix']) && frw_mqtt_praefix_taugt($stand['praefix'])) ? $stand['praefix']
+        : frw_mqtt_praefix(is_array($c) ? $c : frw_vorgaben());
+    if (!$stand) {
+        echo '<INFO> MQTT: kein Stand der Abrufe vorhanden - es ist nicht bekannt, welche Themen unter ' . $praefix
+            . '/ zurueckbehalten stehen. Von Hand: mosquitto_pub -r -n -t <thema>' . "\n";
+        return 2;
+    }
+    $themen = frw_mqtt_leer_themen($stand);
+    if (!$themen) {
+        echo '<INFO> MQTT: laut Stand hat dieses Plugin unter ' . $praefix . '/ nichts zurueckbehalten gesendet - nichts zu leeren.' . "\n";
+        return 0;
+    }
+    $zeilen = array();
+    foreach ($themen as $t) {
+        $zeilen[] = 'retain ' . $praefix . '/' . $t . ' ';
+    }
+    $gw = frw_mqtt_gateway();
+    $datagramme = 0;
+    if ($sender !== null) {
+        for ($r = 1; $r <= max(1, (int) $runden); $r++) {
+            $datagramme += (int) call_user_func($sender, $zeilen);
+        }
+    } else {
+        if (!$gw['gefunden']) {
+            echo '<INFO> MQTT: in der general.json steht kein MQTT-Gateway - ' . count($themen) . ' zurueckbehaltene Themen unter '
+                . $praefix . '/ wurden nicht geleert.' . "\n";
+            return 2;
+        }
+        $fp = @fsockopen('udp://127.0.0.1', (int) $gw['udpport'], $eno, $etxt, 2);
+        if (!$fp) {
+            echo '<WARNING> MQTT: der UDP-Eingang des Gateways ist nicht erreichbar (Port ' . (int) $gw['udpport']
+                . ') - zurueckbehaltene Themen unter ' . $praefix . '/ wurden nicht geleert.' . "\n";
+            return 1;
+        }
+        for ($r = 1; $r <= max(1, (int) $runden); $r++) {
+            if ($r > 1) {
+                usleep((int) $pause_us);
+            }
+            foreach ($zeilen as $i => $z) {
+                if ($i > 0) {
+                    usleep(5000);
+                }
+                if (@fwrite($fp, $z) === strlen($z)) {
+                    $datagramme++;
+                }
+            }
+        }
+        fclose($fp);
+    }
+    echo '<INFO> MQTT: ' . count($themen) . ' zurueckbehaltene Themen unter ' . $praefix . '/ mit leerer Nutzlast an den '
+        . 'UDP-Eingang ' . (int) $gw['udpport'] . ' des Gateways gesendet (' . max(1, (int) $runden) . ' Runden, '
+        . $datagramme . ' Datagramme). Nicht nachgelesen: dieses Plugin liest den Broker nicht; was stehen bleibt, '
+        . 'laesst sich mit mosquitto_pub -r -n -t <thema> von Hand loeschen.' . "\n";
+    return 0;
+}
+
+/* ------------------------------------------------------------------
+ * Sprachansagen (0.9.7, Erweiterung E1) - gemeinsames Modul sprachausgabe.php
+ * ------------------------------------------------------------------
+ * Bauart Raumklima 0.11.40 und Pumpenwacht 1.0.27: der Minutenlauf spricht nie selbst. Er merkt je Anlass und Geraet den
+ * Zustand (data/plugins/<ordner>/ansage_zustand.json, 0600, ohne Text) und legt nur den EINTRITT in
+ * ansage_warte.json; ein abgekoppelter Sender (php -r, eigene Sperre) spricht nach den Regeln des Moduls (Nachtruhe,
+ * Sperre je Schluessel, Schalter haus/ansage/ruhe). Jeder Eintritt wird genau einmal angesagt, das Ende nicht; ein
+ * unvollstaendiger Abruf ist keine neue Aussage (der Zustand bleibt). Laesst sich der Zustand nicht schreiben, wird
+ * nicht angesagt. Text und Token stehen nie im Protokoll. Anlaesse ab Werk aus (ansage_stoerung, ansage_zellen).
+ */
+if (!defined('FRW_ANSAGE_HOECHSTALTER')) {
+    define('FRW_ANSAGE_HOECHSTALTER', 600);   // ein aufgestauter Anlass (Update, Hang) wird nicht mehr angesagt
+}
+
+/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' (kein Antwortweg), SonoX erst ab Modul 1.1.4. */
+function frw_ansage_modi()
+{
+    $m = array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox', 'sonos4lox');
+    if (defined('ANSAGE_FASSUNG') && version_compare(ANSAGE_FASSUNG, '1.1.4', '>=')) {
+        $m[] = 'sonox';
+    }
+    return $m;
+}
+
+/** Bietet die geladene Abschrift die Tabelle der weiteren Ziele an? */
+function frw_mit_zielen()
+{
+    return defined('ANSAGE_FASSUNG') && version_compare(ANSAGE_FASSUNG, '1.2.0', '>=') && function_exists('ansage_ziele_html')
+        && function_exists('ansage_ziele_pruefen') && function_exists('ansage_testknoepfe_html');
+}
+
+/** Der Kontext des Moduls. */
+function frw_ansage_k()
+{
+    $p = frw_paths();
+    return array(
+        'werk'     => ansage_werk_modus(),
+        'port'     => ansage_webport(($p['lbhome'] !== '' ? $p['lbhome'] : dirname(dirname(__DIR__))) . '/config/system/general.json'),
+        'kopf'     => array('User-Agent: LoxBerry Fronius-Waechter'),
+        'ordner'   => ($p['datadir'] !== '' && @is_dir($p['datadir'])) ? $p['datadir'] : '',
+        't'        => function ($s) { return frw_t($s); },
+        'absender' => 'froniuswaechter',
+    );
+}
+
+/** Der Block tts, vervollstaendigt. */
+function frw_tts($c = null)
+{
+    if ($c === null) {
+        $c = frw_config(false);
+    }
+    list($t) = ansage_vervollstaendigen((is_array($c) && isset($c['tts']) && is_array($c['tts'])) ? $c['tts'] : array(), 'aus');
+    return $t;
+}
+
+function frw_ansage_an($c = null)
+{
+    $t = frw_tts($c);
+    return is_string($t['mode']) && $t['mode'] !== 'aus' && in_array($t['mode'], frw_ansage_modi(), true);
+}
+
+/** Die Regeln: gespeichert und gueltig, sonst die Vorgabe des Moduls (mit Nachtruhe). */
+function frw_ansage_regeln($c = null)
+{
+    if ($c === null) {
+        $c = frw_config(false);
+    }
+    $g = '';
+    $r = (is_array($c) && isset($c['ansage_regeln'])) ? ansage_regeln_wert($c['ansage_regeln'], $g) : null;
+    return $r === null ? ansage_regeln_vorgaben() : $r;
+}
+
+/** Die Felder des Formulars Sprachansagen fuer die Einmalmeldung (X-2); nie die Sprechtoken (ansage_x2_felder()). */
+function frw_ansage_x2_felder()
+{
+    return array_merge(ansage_x2_felder(), ansage_regeln_x2_felder(),
+        array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet', 'ansage_stoerung', 'ansage_zellen'));
+}
+
+/**
+ * Die Anlaesse eines Laufs, rein rechnend (selbsttestbar). $alt: gemerkter Zustand (Schluessel => 0/1), $stand: der
+ * neue Stand, $c: Konfiguration. Rueckgabe array(neuer Zustand, Eintraege fuer ansage_regel_sprechen()). Schluessel
+ * stoerung:<dm>:<wr> und zellen:<dm>:<sp>; ein Haken aus laesst seine Schluessel fallen (wer ihn einschaltet, hoert
+ * einen anhaltenden Zustand einmal).
+ */
+function frw_ansage_eintraege(array $alt, array $stand, array $c)
+{
+    $neu = array();
+    $l = array();
+    $dms = (isset($stand['dm']) && is_array($stand['dm'])) ? $stand['dm'] : array();
+    $schwelle = (int) $c['schwelle_zellen_mv'];
+    foreach ($dms as $n => $dm) {
+        if (!is_array($dm)) {
+            continue;
+        }
+        $gilt = !empty($dm['ok']);
+        if (!empty($c['ansage_stoerung']) && isset($dm['wr']) && is_array($dm['wr'])) {
+            foreach ($dm['wr'] as $id => $w) {
+                $s = 'stoerung:' . (int) $n . ':' . (int) $id;
+                $war = !empty($alt[$s]);
+                if (!$gilt || !is_array($w) || !isset($w['stoerung'])) {
+                    if (array_key_exists($s, $alt)) {
+                        $neu[$s] = $war ? 1 : 0;
+                    }
+                    continue;
+                }
+                $ist = (int) $w['stoerung'] === 1;
+                $neu[$s] = $ist ? 1 : 0;
+                if ($ist && !$war) {
+                    $l[] = array('schluessel' => $s, 'text' => sprintf(frw_t('DURCHSAGE.STOERUNG'), (int) $n, (int) $id,
+                        isset($w['status']) ? (string) $w['status'] : '-', isset($w['fehler']) ? (string) $w['fehler'] : '-'));
+                }
+            }
+        }
+        if (!empty($c['ansage_zellen']) && $schwelle > 0 && isset($dm['sp']) && is_array($dm['sp'])) {
+            foreach ($dm['sp'] as $sid => $sp) {
+                $s = 'zellen:' . (int) $n . ':' . (int) $sid;
+                $war = !empty($alt[$s]);
+                if (!$gilt || !is_array($sp) || !isset($sp['u_diff_mv'])) {
+                    if (array_key_exists($s, $alt)) {
+                        $neu[$s] = $war ? 1 : 0;
+                    }
+                    continue;
+                }
+                $ist = (int) $sp['u_diff_mv'] >= $schwelle;
+                $neu[$s] = $ist ? 1 : 0;
+                if ($ist && !$war) {
+                    $l[] = array('schluessel' => $s, 'text' => sprintf(frw_t('DURCHSAGE.ZELLEN'), (int) $n, (int) $sid,
+                        (int) $sp['u_diff_mv'], $schwelle));
+                }
+            }
+        }
+    }
+    return array($neu, $l);
+}
+
+/** Die Warteliste unter einer Dateisperre aendern: $fn(Liste) -> array(neue Liste, Ergebnis). */
+function frw_ansage_warte($fn)
+{
+    $d = frw_paths()['datadir'];
+    if ($d === '') {
+        return null;
+    }
+    if (!is_dir($d)) {
+        @mkdir($d, 0775, true);
+    }
+    $f = $d . '/ansage_warte.json';
+    $umask_alt = umask(0077);
+    $h = @fopen($f, 'c+');
+    umask($umask_alt);
+    if ($h === false) {
+        return null;
+    }
+    if (!flock($h, LOCK_EX)) {
+        fclose($h);
+        return null;
+    }
+    $alt = json_decode((string) stream_get_contents($h), true);
+    list($neu, $erg) = call_user_func($fn, is_array($alt) ? $alt : array());
+    rewind($h);
+    ftruncate($h, 0);
+    fwrite($h, (string) json_encode($neu));
+    fflush($h);
+    flock($h, LOCK_UN);
+    fclose($h);
+    @chmod($f, 0600);
+    return $erg;
+}
+
+/**
+ * Anlaesse hinlegen und - mit $starten - den Sender abgekoppelt starten; wartet auf nichts. Die Schale schliesst vor
+ * dem exec jede Deskriptor-Nummer ueber 2, sonst erbte der Sender die Sperren des Takts (Bauart Raumklima 0.11.40).
+ */
+function frw_ansage_legen(array $l, $jetzt = null, $starten = true)
+{
+    if (!$l) {
+        return 'nichts';
+    }
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    frw_ansage_warte(function ($alt) use ($l, $jetzt) {
+        foreach ($l as $e) {
+            $alt[] = $e + array('zeit' => $jetzt);
+        }
+        return array(array_slice($alt, -50), null);
+    });
+    if (!$starten) {
+        return 'gelegt';
+    }
+    $php = (defined('PHP_BINARY') && PHP_BINARY !== '' && is_executable(PHP_BINARY) && stripos(basename(PHP_BINARY), 'php') === 0
+        && stripos(basename(PHP_BINARY), 'fpm') === false) ? PHP_BINARY : 'php';
+    $befehl = 'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; '
+            . 'exec ' . escapeshellarg($php) . ' -r ' . escapeshellarg('chdir(dirname($argv[1])); $_SERVER["SCRIPT_FILENAME"] = $_SERVER["PHP_SELF"] = $argv[1]; require $argv[1]; frw_ansage_senden();')
+            . ' -- ' . escapeshellarg(__FILE__);
+    $aus = array();
+    $rc = 1;
+    @exec('bash -c ' . escapeshellarg($befehl) . ' </dev/null >/dev/null 2>&1 &', $aus, $rc);
+    return $rc === 0 ? 'gestartet' : 'kein_start';
+}
+
+/** Das Sprechtoken aus Alexa-NG und Chromecast4lox uebernehmen (Modul ansage_token_abgleich()). Schreibt nur bei einer
+ *  Aenderung, nennt nie das Token. */
+function frw_ansage_token_pflegen($c = null)
+{
+    if ($c === null) {
+        $c = frw_config(false);
+    }
+    if (!is_array($c)) {
+        return false;
+    }
+    list($neu, $her2, $g) = ansage_token_abgleich(frw_tts($c), isset($c['ansage_token_herkunft']) ? $c['ansage_token_herkunft'] : array(), frw_ansage_k());
+    if (!$g) {
+        return false;
+    }
+    $c['tts'] = $neu;
+    $c['ansage_token_herkunft'] = $her2;
+    if (!frw_config_speichern($c)) {
+        return false;
+    }
+    frw_log('Ansage: Sprechtoken uebernommen (' . implode(', ', $g) . ').');
+    return true;
+}
+
+/** Der Block fuer Testansage und Sender: uebernommene Token aufgeloest, Tafel eingereiht. Nur im Speicher. */
+function frw_ansage_vor_ort($c = null)
+{
+    if ($c === null) {
+        $c = frw_config(false);
+    }
+    $k = frw_ansage_k();
+    return ansage_tafel_einreihen(ansage_token_fuer_lauf(frw_tts($c), (is_array($c) && isset($c['ansage_token_herkunft'])) ? $c['ansage_token_herkunft'] : array(), $k),
+        frw_ansage_regeln($c), $k, true);
+}
+
+/** Die Lage im Reiter Test: Ziele, Nachtruhe, Schalter (fragt den Broker - nur im geoeffneten Reiter). */
+function frw_ansage_lage_html($c = null)
+{
+    if ($c === null) {
+        $c = frw_config(false);
+    }
+    $o = array();
+    foreach (ansage_regel_lage(frw_tts($c), frw_ansage_regeln($c), frw_ansage_k(), true) as $z) {
+        $o[] = '<div class="sm-hilfe">' . frw_e(html_entity_decode((string) $z[1], ENT_QUOTES, 'UTF-8')) . '</div>';
+    }
+    return implode("\n", $o) . "\n";
+}
+
+/**
+ * Die Ansagen eines Laufs (aus frw_takt(), nach dem Schreiben des Stands). Ist die Ausgabe aus oder kein Anlass
+ * eingeschaltet, wird nichts gemerkt und ein alter Zustand entfernt. Rueckgabe: Zahl der hingelegten Anlaesse.
+ */
+function frw_ansage_lauf(array $stand, array $c, $starten = true, $jetzt = null)
+{
+    $p = frw_paths();
+    if ($p['datadir'] === '' || !is_dir($p['datadir'])) {
+        return 0;
+    }
+    $datei = $p['datadir'] . '/ansage_zustand.json';
+    if (!frw_ansage_an($c) || (empty($c['ansage_stoerung']) && empty($c['ansage_zellen']))) {
+        if (is_file($datei)) {
+            @unlink($datei);
+        }
+        return 0;
+    }
+    $alt = frw_json_lesen($datei);
+    list($neu, $l) = frw_ansage_eintraege(is_array($alt) ? $alt : array(), $stand, $c);
+    if ($neu !== (is_array($alt) ? $alt : null) && !frw_json_schreiben($datei, $neu)) {
+        frw_log('Ansage: der Zustand liess sich nicht schreiben (' . basename($datei) . ') - ohne ihn wird nicht angesagt.');
+        return 0;
+    }
+    if (!$l) {
+        return 0;
+    }
+    frw_ansage_legen($l, $jetzt, $starten);
+    return count($l);
+}
+
+/**
+ * Der Sender: eigene Sperre, nimmt die Warteliste und spricht nach den Regeln des Moduls. "aus" und "kein Ziel"
+ * hinterlassen keine Zeile; ein gescheitertes Ziel eine je Aenderung. Rueckgabe: Kurzform fuer Probe und Protokoll.
+ */
+function frw_ansage_senden($jetzt = null)
+{
+    $d = frw_paths()['datadir'];
+    if ($d === '') {
+        return 'ohne_wurzel';
+    }
+    if (!is_dir($d)) {
+        @mkdir($d, 0775, true);
+    }
+    $fh = @fopen($d . '/ansage_senden.lock', 'c');
+    if ($fh === false || !flock($fh, LOCK_EX | LOCK_NB)) {
+        return 'laeuft';
+    }
+    $erg = 'nichts';
+    $l = frw_ansage_warte(function ($alt) { return array(array(), $alt); });
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $frisch = array();
+    foreach (is_array($l) ? $l : array() as $e) {
+        if (is_array($e) && isset($e['zeit']) && $jetzt - (int) $e['zeit'] <= FRW_ANSAGE_HOECHSTALTER) {
+            unset($e['zeit']);
+            $frisch[] = $e;
+        }
+    }
+    if ($frisch) {
+        frw_ansage_token_pflegen();
+        $c = frw_config(false);
+        $a = ansage_regel_sprechen($frisch, frw_ansage_vor_ort($c), frw_ansage_regeln($c), frw_ansage_k());
+        $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
+        if ($a['r'] !== null) {
+            $merk = $d . '/ansage_lage.txt';
+            $lage = $a['r']['stand'] === 1 ? 'gesprochen' : ansage_kurz($a['r']);
+            if ($a['r']['stand'] === 1 || (string) @file_get_contents($merk) !== $lage) {
+                frw_log('Ansage: ' . ansage_regel_kurz($a));
+            }
+            @file_put_contents($merk, $lage);
+        } elseif ($a['regel'] !== 'AUS' && $a['regel'] !== 'KEIN_ZIEL') {
+            frw_log('Ansage entfaellt: ' . ansage_regel_kurz($a));
+        }
+    }
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $erg;
 }
 
 /* ------------------------------------------------------------------
@@ -1864,6 +2402,81 @@ function frw_zeile($n, array $stand, array $c, $jetzt = null)
         $teile[] = $w['http'] . '=' . $w['wert'];
     }
     return array(200, implode(';', $teile));
+}
+
+/**
+ * 0.9.7 (Erweiterung E3): der Stand kompakt als JSON (Vertrag 1) fuer eine Uebersicht wie das Dashboard - je
+ * Datamanager ok, alter, erreichbar, ausfall_folge; je Wechselrichter status, fehler, stoerung (Gruppe wr); je
+ * Speicher soc, anzahl, soc_streuung (ueber seine Module), u_diff_mv (Gruppe speicher) und - nur mit Schwelle ueber
+ * 0 - warn_streuung, warn_zellen. Was das Geraet nicht geliefert hat, fehlt (nie 0). Keine Adresse, kein Token, keine
+ * Seriennummer. ok je Datamanager wie OK= in frw_zeile(); ok oben = alle eingetragenen ok. Rueckgabe array(http,
+ * json): 503 ohne jeden Stand (Regeln/07, mit grund), sonst 200.
+ */
+function frw_json_kurz(array $stand, array $c, $jetzt = null)
+{
+    if ($jetzt === null) {
+        $jetzt = time();
+    }
+    $aus = array('plugin' => frw_paths()['plugin'], 'vertrag' => 1, 'ts' => isset($stand['ts']) ? (int) $stand['ts'] : 0,
+                 'dienst' => empty($c['dienst_ein']) ? 0 : 1, 'ok' => 0, 'dm' => array());
+    $dms = (isset($stand['dm']) && is_array($stand['dm'])) ? $stand['dm'] : array();
+    if (!$dms) {
+        $aus['grund'] = empty($c['dienst_ein']) ? 'DIENST_AUS' : 'NOCH_KEIN_ABRUF';
+        return array(503, (string) json_encode($aus, JSON_UNESCAPED_SLASHES));
+    }
+    $zahl = function ($v) { return (is_int($v) || (is_float($v) && is_finite($v))) ? $v : null; };
+    $grenze = 3 * max(FRW_TAKT_MIN, (int) $c['takt_s']);
+    $alle = true;
+    foreach ($dms as $n => $dm) {
+        if (!is_array($dm) || preg_match('/^[1-9]$/', (string) $n) !== 1) {
+            continue;
+        }
+        $alter = frw_alter($dm, $jetzt);
+        $ok = !empty($dm['ok']) && $alter >= 0 && $alter <= $grenze;
+        $alle = $alle && $ok;
+        $e = array('ok' => $ok ? 1 : 0, 'alter' => $alter);
+        foreach (array('erreichbar', 'ausfall_folge') as $f) {
+            if (isset($dm[$f]) && is_int($dm[$f])) {
+                $e[$f] = $dm[$f];
+            }
+        }
+        if (frw_gruppe_an('wr', $c) && isset($dm['wr']) && is_array($dm['wr'])) {
+            foreach ($dm['wr'] as $id => $w) {
+                $x = array();
+                foreach (array('status', 'fehler', 'stoerung') as $f) {
+                    if (is_array($w) && isset($w[$f]) && is_int($w[$f])) {
+                        $x[$f] = $w[$f];
+                    }
+                }
+                if ($x) {
+                    $e['wr'][(string) $id] = $x;
+                }
+            }
+        }
+        if (frw_gruppe_an('speicher', $c) && isset($dm['sp']) && is_array($dm['sp'])) {
+            foreach ($dm['sp'] as $sid => $s) {
+                $x = array();
+                foreach (array('soc', 'anzahl', 'soc_streuung', 'u_diff_mv') as $f) {
+                    if (is_array($s) && isset($s[$f]) && $zahl($s[$f]) !== null) {
+                        $x[$f] = $s[$f];
+                    }
+                }
+                if (frw_gruppe_an('schwelle_streuung', $c) && isset($x['soc_streuung'])) {
+                    $x['warn_streuung'] = $x['soc_streuung'] >= (int) $c['schwelle_soc_streuung'] ? 1 : 0;
+                }
+                if (frw_gruppe_an('schwelle_zellen', $c) && isset($x['u_diff_mv'])) {
+                    $x['warn_zellen'] = $x['u_diff_mv'] >= (int) $c['schwelle_zellen_mv'] ? 1 : 0;
+                }
+                if ($x) {
+                    $e['sp'][(string) $sid] = $x;
+                }
+            }
+        }
+        $aus['dm'][(string) $n] = $e;
+    }
+    $aus['ok'] = ($alle && $aus['dm']) ? 1 : 0;
+    $js = json_encode($aus, JSON_UNESCAPED_SLASHES);
+    return $js === false ? array(500, '{"ok":0,"grund":"JSON"}') : array(200, $js);
 }
 
 /** Rechnername fuer Adressen: wie der Browser den LoxBerry erreicht. */
@@ -2376,6 +2989,13 @@ function frw_selbsttest()
     $pruef(!$retain_falsch, 'Aussagen des Dienstes sind nie retained');
     $pruef(frw_retain('wr.status') && !frw_retain('wr.e_tag') && !frw_retain('m.soc'), 'Retain: Status ja, Energie und Ladestand nein');
     $pruef(frw_gateway_name('froniuswaechter', 'dm1/wr1/status') === 'froniuswaechter_dm1_wr1_status', 'Gateway-Name: froniuswaechter_dm1_wr1_status');
+    /* 0.9.7 (F8): Themen, die die Deinstallation leert. */
+    $pruef(frw_thema_feld('dm1/wr2/status') === 'wr.status' && frw_thema_feld('dm1/sp1/modul3/zustand') === 'm.zustand'
+        && frw_thema_feld('dm1/sp1/warn_zellen') === 'sp.warn_zellen' && frw_thema_feld('status/ok') === '',
+        'Thema zu Feld: Wechselrichter, Modul, Speicher, Lebenszeichen');
+    $lt = frw_mqtt_leer_themen(array('letzte' => array('dm1/wr1/status' => '7', 'dm1/wr1/e_tag' => '1',
+        'dm1/sp1/modul1/zustand' => '3', 'dm1/sp1/modul1/soc' => '20', 'dm1/erreichbar' => '1')));
+    $pruef($lt === array('dm1/sp1/modul1/zustand', 'dm1/wr1/status'), 'Deinstallation leert nur zurueckbehaltene Themen: ' . implode(', ', $lt));
 
     $alt = array('dm' => array(2 => array('ausfall_folge' => 2, 'wr' => array(2 => array('stoerung' => 0)), 'sp' => array())));
     $neu = array('dm' => array(2 => array('ok' => 1, 'ausfall_folge' => 0, 'wr' => array(2 => array('status' => 10, 'fehler' => 0, 'stoerung' => 1)), 'sp' => array())));
@@ -2384,6 +3004,36 @@ function frw_selbsttest()
     $cm['meldung_stoerung'] = 1;
     $pruef(count(frw_meldungen_ermitteln($alt, $neu, $cm)) === 1, 'Meldung Stoerung eingeschaltet: genau eine Meldung beim Wechsel');
     $pruef(!frw_meldungen_ermitteln(array(), $neu, $cm), 'Erster Lauf ohne alten Stand: keine Meldung');
+
+    /* 0.9.7 (E1): Ansageanlaesse - jeder Eintritt genau einmal, ab Werk aus, ohne vollstaendigen Abruf keine Aussage. */
+    $ca = $c;
+    $ca['ansage_stoerung'] = 1;
+    $ca['ansage_zellen'] = 1;
+    $ca['schwelle_zellen_mv'] = 100;
+    $sa = array('dm' => array(1 => array('ok' => 1, 'wr' => array(1 => array('status' => 10, 'fehler' => 0, 'stoerung' => 1)),
+                                         'sp' => array(1 => array('u_diff_mv' => 150)))));
+    list($az1, $al1) = frw_ansage_eintraege(array(), $sa, $ca);
+    list(, $al2) = frw_ansage_eintraege($az1, $sa, $ca);
+    $pruef(count($al1) === 2 && !$al2 && $al1[0]['schluessel'] === 'stoerung:1:1' && $al1[1]['schluessel'] === 'zellen:1:1'
+        && strpos($al1[0]['text'], '10') !== false && strpos($al1[1]['text'], '150') !== false,
+        'Ansage: Stoerung und Zellspannung je einmal beim Eintritt, im naechsten Lauf nicht wieder');
+    list(, $al3) = frw_ansage_eintraege(array(), $sa, $c);
+    $pruef(!$al3, 'Ansage: Anlaesse ab Werk aus - kein Eintrag');
+    $sa['dm'][1]['ok'] = 0;
+    list($az4, $al4) = frw_ansage_eintraege(array('stoerung:1:1' => 0), $sa, $ca);
+    $pruef(!$al4 && isset($az4['stoerung:1:1']) && $az4['stoerung:1:1'] === 0, 'Ansage: unvollstaendiger Abruf ist keine neue Aussage, der Zustand bleibt');
+
+    /* 0.9.7 (E3): die kompakte JSON-Abfrage. */
+    list($jc, $js) = frw_json_kurz($stand, $c, 1010);
+    $jd = json_decode($js, true);
+    $pruef($jc === 200 && is_array($jd) && $jd['ok'] === 1 && isset($jd['dm']['1']['wr']['1']['status'])
+        && $jd['dm']['1']['wr']['1']['status'] === 7 && isset($jd['dm']['1']['sp']['1']['u_diff_mv'])
+        && $jd['dm']['1']['sp']['1']['u_diff_mv'] === 150 && $jd['dm']['1']['sp']['1']['soc_streuung'] === 30,
+        'JSON: ok 1, Status 7, u_diff_mv 150, soc_streuung 30');
+    $pruef(strpos($js, 'adresse') === false && strpos($js, 'token') === false && strpos($js, 'xxxx') === false
+        && strpos($js, 'Serial') === false, 'JSON: keine Adresse, kein Token, keine Seriennummer');
+    list($jc2) = frw_json_kurz(array(), $c, 1010);
+    $pruef($jc2 === 503, 'JSON ohne Stand: HTTP 503');
 
     /* 0.9.3: gemeinsames Sicherungsmodul - die Faelle gegen die Vorgaben als geltenden Stand. */
     $vg0 = frw_vorgaben();

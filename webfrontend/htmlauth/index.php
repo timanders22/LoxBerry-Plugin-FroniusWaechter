@@ -13,6 +13,10 @@
  * (c) Fronius-Waechter Plugin Authors - MIT-Lizenz
  */
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+/* 0.9.7 (fremder Pruefer F6; Hausform Alexa-NG, Abfahrts-Assistent, Marstek Venus E, Pumpenwacht): keine Meldung in die
+   Seite. Eine Warnung vor header() schickt die Kopfzeilen vorzeitig - die Umleitung nach einem POST (303) und die
+   Downloads (Sicherung, Importvorlage) gingen dann verloren (nachgestellt mit php-cgi, Fall N6). */
+ini_set('display_errors', '0');
 
 /* Die Bibliothek liegt im ANDEREN Baum:
      installiert  $LB/webfrontend/htmlauth/plugins/<ordner>/index.php
@@ -68,6 +72,7 @@ $frw_meldung = '';
 $frw_hinweise = array();
 $frw_fehler = array();
 $frw_messung = null;
+$frw_eingaben = null;     // X-2 (0.9.7)
 $frw_post = isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST';
 
 if (!$frw_post) {
@@ -83,6 +88,9 @@ if (!$frw_post) {
         }
         if (isset($frw_einmal['messung']) && is_array($frw_einmal['messung'])) {
             $frw_messung = $frw_einmal['messung'];
+        }
+        if (isset($frw_einmal['eingaben']) && is_array($frw_einmal['eingaben'])) {
+            frw_x2($frw_einmal['eingaben']);     // X-2 (0.9.7)
         }
     }
 }
@@ -101,6 +109,82 @@ if ($frw_wache !== '') {
 function frw_feld($name)
 {
     return (isset($_POST[$name]) && is_string($_POST[$name])) ? trim($_POST[$name]) : '';
+}
+
+/* ---------- X-2: Eingaben nach einer Beanstandung (0.9.7, fremder Pruefer F7) ----------
+ * Regeln/04, "Nach einer Beanstandung stehen die eingetippten Werte wieder im Formular" (Bauart Abfahrts-Assistent,
+ * Alexa-NG, Marstek Venus E). Mit der Einmalmeldung reisen unter 'eingaben' die Felder des EINEN beanstandeten
+ * Formulars (einstellungen oder mqtt) und die Namen der beanstandeten Felder - nur nach einer Beanstandung, nie nach
+ * dem Speichern. Keines der beiden Formulare traegt ein Geheimnis (das Aktionstoken steht in keinem). Ein Wert, der
+ * keine Zeichenkette in UTF-8 bis 2100 Byte ist, reist nicht mit; sein Feld zeigt den gespeicherten Wert. Ohne
+ * Eingaben liefern die Helfer genau die gespeicherten Werte (Ausgabe wie bis 0.9.6). */
+function frw_x2_felder($formular)
+{
+    if ($formular === 'mqtt') {
+        return array('mqtt_ein', 'mqtt_praefix');
+    }
+    if ($formular === 'ansage') {
+        return frw_ansage_x2_felder();     // 0.9.7 (E1)
+    }
+    if ($formular === 'einstellungen') {
+        return array_values(array_diff(array_keys(frw_vorgaben()), array('aktionstoken', 'mqtt_ein', 'mqtt_praefix', 'ansage_stoerung', 'ansage_zellen', 'tts', 'ansage_regeln', 'ansage_token_herkunft')));
+    }
+    return array();
+}
+
+function frw_x2_tauglich($w)
+{
+    return is_string($w) && strlen($w) <= 2100 && preg_match('//u', $w) === 1;
+}
+
+/** Die eingetippten Werte eines Formulars fuer die Einmalmeldung; ein nicht gesetzter Haken reist als ''. */
+function frw_x2_einpacken($formular, array $falsch)
+{
+    $w = array();
+    foreach (frw_x2_felder($formular) as $f) {
+        $roh = isset($_POST[$f]) ? $_POST[$f] : '';
+        if (frw_x2_tauglich($roh)) {
+            $w[$f] = $roh;
+        }
+    }
+    return array('formular' => $formular, 'werte' => $w, 'falsch' => array_values(array_unique($falsch)));
+}
+
+/** Die Eingaben nach der Umleitung: mit Feld setzen, ohne lesen (null = keine). */
+function frw_x2($neu = null)
+{
+    static $e = null;
+    if (is_array($neu) && isset($neu['formular'], $neu['werte'], $neu['falsch']) && is_string($neu['formular'])
+        && is_array($neu['werte']) && is_array($neu['falsch'])) {
+        $e = $neu;
+    }
+    return $e;
+}
+
+function frw_x2_wert($formular, $name, $gespeichert)
+{
+    $e = frw_x2();
+    if ($e !== null && $e['formular'] === $formular && isset($e['werte'][$name]) && frw_x2_tauglich($e['werte'][$name])) {
+        return $e['werte'][$name];
+    }
+    return (string) $gespeichert;
+}
+
+function frw_x2_haken($formular, $name, $gespeichert)
+{
+    $e = frw_x2();
+    if ($e !== null && $e['formular'] === $formular && in_array($name, frw_x2_felder($formular), true)) {
+        $w = isset($e['werte'][$name]) ? $e['werte'][$name] : '';
+        return ($w !== '' && $w !== '0') ? ' checked' : '';
+    }
+    return $gespeichert ? ' checked' : '';
+}
+
+function frw_x2_mark($formular, $name)
+{
+    $e = frw_x2();
+    return ($e !== null && $e['formular'] === $formular && in_array($name, $e['falsch'], true))
+        ? ' class="sm-beanstandet" aria-invalid="true"' : '';
 }
 
 /** Was mit dem Dienst geschieht - gesagt, nicht geraten (Regeln/05, Punkt 7). */
@@ -122,8 +206,9 @@ function frw_dienst_satz(array $c)
 if ($frw_post && isset($_POST['speichern'])) {
     $frw_neu = $frw_cfg;
     $frw_mangel = array();
+    $frw_x2_falsch = array();     // X-2 (0.9.7)
     foreach (array('dienst_ein', 'gruppe_wr', 'gruppe_energie', 'gruppe_speicher', 'meldung_stoerung',
-                   'meldung_ausfall', 'meldung_speicher', 'eb_anzeigen') as $frw_s) {
+                   'meldung_ausfall', 'meldung_speicher', 'eb_anzeigen', 'json_ein', 'stand_retten') as $frw_s) {
         $frw_neu[$frw_s] = empty($_POST[$frw_s]) ? 0 : 1;
     }
     foreach (array('takt_s', 'timeout_s', 'schwelle_soc_streuung', 'schwelle_zellen_mv',
@@ -133,10 +218,12 @@ if ($frw_post && isset($_POST['speichern'])) {
             $frw_neu[$frw_s] = $frw_wert;
         } else {
             $frw_mangel[] = $frw_grund;
+            $frw_x2_falsch[] = $frw_s;     // X-2 (0.9.7)
         }
     }
     if (!$frw_mangel && $frw_neu['dienst_ein'] && !frw_dm_liste($frw_neu)) {
         $frw_mangel[] = frw_t('EINST.DIENST_OHNE_ADRESSE');
+        $frw_x2_falsch[] = 'dienst_ein';     // X-2 (0.9.7)
     }
     if (!$frw_mangel && $frw_neu['meldung_speicher'] && (int) $frw_neu['schwelle_soc_streuung'] === 0
         && (int) $frw_neu['schwelle_zellen_mv'] === 0) {
@@ -144,6 +231,7 @@ if ($frw_post && isset($_POST['speichern'])) {
     }
     if ($frw_mangel) {
         $frw_fehler[] = array('kopf' => frw_t('EINST.NICHT_GESPEICHERT'), 'punkte' => $frw_mangel);
+        $frw_eingaben = frw_x2_einpacken('einstellungen', $frw_x2_falsch);     // X-2 (0.9.7)
     } elseif (frw_config_speichern($frw_neu)) {
         $frw_meldung = frw_t('EINST.GESPEICHERT') . ' ' . frw_dienst_satz($frw_neu);
         if ($frw_neu['dienst_ein'] && empty($frw_cfg['dienst_ein'])) {
@@ -175,6 +263,7 @@ if ($frw_post && isset($_POST['mqtt_speichern'])) {
     list($frw_ok, $frw_wert, $frw_grund) = frw_wert_pruefen('mqtt_praefix', frw_feld('mqtt_praefix'));
     if (!$frw_ok) {
         $frw_fehler[] = array('kopf' => frw_t('EINST.NICHT_GESPEICHERT'), 'punkte' => array($frw_grund));
+        $frw_eingaben = frw_x2_einpacken('mqtt', array('mqtt_praefix'));     // X-2 (0.9.7)
     } else {
         $frw_neu['mqtt_praefix'] = $frw_wert;
         if (frw_config_speichern($frw_neu)) {
@@ -184,6 +273,65 @@ if ($frw_post && isset($_POST['mqtt_speichern'])) {
         }
     }
     $frw_tab = 'tab-mqtt';
+}
+
+/* ---------------- Sprachansagen speichern (0.9.7, E1): eigenes Formular, eigener Handler ----------------
+ * Formularblock und Regeln aus dem gemeinsamen Modul (Bauart Raumklima 0.11.40): jede Beanstandung verhindert das
+ * Speichern, kein Sprechtoken steht in einer Meldung (leeres Tokenfeld = behalten, Haken = loeschen). Die Saetze des
+ * Moduls sind maskiert; die Ausgabe hier maskiert selbst, deshalb werden sie vorher zurueckgewandelt. */
+if ($frw_post && isset($_POST['ansage_speichern'])) {
+    $frw_neu = $frw_cfg;
+    $frw_am = array();
+    $frw_ab = array();
+    $frw_ah = array();
+    $frw_neu['tts'] = ansage_formular_lesen($_POST, frw_tts($frw_cfg), $frw_am, $frw_ab, array('modi' => frw_ansage_modi(),
+        'ziele' => frw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), frw_ansage_k(), $frw_ah);
+    $frw_rm = array();
+    $frw_rb = array();
+    list($frw_neu['ansage_regeln']) = ansage_regeln_formular($_POST, frw_ansage_regeln($frw_cfg), array(), $frw_rm, $frw_rb, frw_ansage_k());
+    $frw_neu['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST,
+        isset($frw_cfg['ansage_token_herkunft']) && is_array($frw_cfg['ansage_token_herkunft']) ? $frw_cfg['ansage_token_herkunft'] : array());
+    $frw_neu['ansage_stoerung'] = empty($_POST['ansage_stoerung']) ? 0 : 1;
+    $frw_neu['ansage_zellen'] = empty($_POST['ansage_zellen']) ? 0 : 1;
+    $frw_mangel = array();
+    foreach (array_merge($frw_am, $frw_rm) as $frw_x) {
+        $frw_mangel[] = html_entity_decode((string) $frw_x['text'], ENT_QUOTES, 'UTF-8');
+    }
+    foreach (is_array($frw_ah) ? $frw_ah : array() as $frw_x) {
+        $frw_hinweise[] = html_entity_decode((string) $frw_x['text'], ENT_QUOTES, 'UTF-8');
+    }
+    if ($frw_mangel) {
+        $frw_fehler[] = array('kopf' => frw_t('EINST.NICHT_GESPEICHERT'), 'punkte' => $frw_mangel);
+        $frw_eingaben = frw_x2_einpacken('ansage', array_merge($frw_ab, $frw_rb));     // X-2
+    } elseif (frw_config_speichern($frw_neu)) {
+        $frw_meldung = frw_t('EINST.ANSAGE_GESPEICHERT');
+    } else {
+        $frw_fehler[] = frw_t('EINST.SCHREIBFEHLER');
+    }
+    $frw_tab = 'tab-settings';
+}
+
+/* ---------------- Testansage (Reiter Test, 0.9.7, E1) ----------------
+ * ansage_test spricht an alle Ziele, ansage_test_ziel=n nur an Ziel n. Ins Protokoll nur die Kurzform, nie Text oder
+ * Token. Die Testansage geht an Nachtruhe, Sperre und Schalter vorbei (Modul). */
+if ($frw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    $frw_tk = frw_ansage_k();
+    $frw_tnur = (isset($_POST['ansage_test_ziel']) && frw_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $frw_tnur === 0) {
+        $frw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($frw_tnur >= 1) {
+        $frw_tr = ansage_testansage(frw_ansage_vor_ort($frw_cfg), $frw_tk, $frw_tnur);
+    } else {
+        $frw_tr = ansage_testansage(frw_ansage_vor_ort($frw_cfg), $frw_tk);
+    }
+    frw_log('Testansage' . ($frw_tnur >= 1 ? ' an Ziel ' . $frw_tnur : '') . ': ' . ansage_kurz($frw_tr));
+    $frw_tg = html_entity_decode(ansage_kennung_text($frw_tr['kennung'], $frw_tk), ENT_QUOTES, 'UTF-8');
+    if ($frw_tr['stand'] === 1) {
+        $frw_meldung = frw_t('TEST.ANSAGE_OK');
+    } else {
+        $frw_fehler[] = sprintf(frw_t($frw_tr['stand'] === -1 ? 'TEST.ANSAGE_NICHTS' : 'TEST.ANSAGE_FEHL'), $frw_tg);
+    }
+    $frw_tab = 'tab-test';
 }
 
 /* ---------------- Einstellungen sichern (Download, keine Umleitung) ------- */
@@ -289,11 +437,17 @@ if ($frw_post && isset($_POST['messen'])) {
 if ($frw_post) {
     $frw_m = array('meldung' => $frw_meldung, 'hinweise' => $frw_hinweise, 'fehler' => $frw_fehler,
                    'messung' => $frw_messung);
+    if ($frw_eingaben !== null) {
+        $frw_m['eingaben'] = $frw_eingaben;     // X-2 (0.9.7): nur nach einer Beanstandung
+    }
     if (frw_einmal_schreiben($frw_m)) {
         header('Location: index.php?form=' . rawurlencode(substr($frw_tab, 4)), true, 303);
         exit;
     }
     $frw_hinweise[] = frw_t('EINST.EINMAL_FEHLT');
+    if ($frw_eingaben !== null) {
+        frw_x2($frw_eingaben);     // X-2 (0.9.7): ohne Umleitung gleich hier
+    }
 }
 
 $frw_cfg = frw_config();
@@ -304,7 +458,8 @@ $frw_pf = frw_mqtt_praefix($frw_cfg);
 $frw_dms = frw_dm_liste($frw_cfg);
 $frw_rahmen = class_exists('LBWeb', false);
 if ($frw_rahmen) {
-    LBWeb::lbheader(frw_t('ALLGEMEIN.TITEL') . ' ' . FRW_FASSUNG, 'https://wiki.loxberry.de/', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel(frw_t('ALLGEMEIN.TITEL'), __DIR__), 'https://wiki.loxberry.de/', 'help.html');
 }
 ?>
 <style>
@@ -406,6 +561,9 @@ if ($frw_rahmen) {
 .sm-log { background: #1e1e1e; color: #d4d4d4; font-family: Consolas, "Courier New", monospace;
     font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
 .sm-grau { color: #999; font-style: italic; }
+/* X-2 (0.9.7): ein beanstandetes Feld nach der Umleitung - eigene Zutat wie im Abfahrts-Assistenten, nicht Teil der Hausvorlage. */
+.sm-wrap .sm-beanstandet { border: 2px solid #c62828 !important; background: #fff5f5 !important; }
+.sm-wrap input[type=checkbox].sm-beanstandet { outline: 2px solid #c62828; outline-offset: 2px; }
 /* Seitenbild aus dem Musterprojekt, wie Weatherdata 0.9.17. */
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
@@ -471,86 +629,123 @@ if (!$frw_dms) {
 
 <h2><?= frw_e(frw_t('EINST.H_DIENST')) ?></h2>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="dienst_ein" value="1"<?= !empty($frw_cfg['dienst_ein']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_DIENST')) ?></label>
+	<label><input data-role="none" type="checkbox" name="dienst_ein" value="1"<?= frw_x2_haken('einstellungen', 'dienst_ein', !empty($frw_cfg['dienst_ein'])) ?><?= frw_x2_mark('einstellungen', 'dienst_ein') ?>><?= frw_e(frw_t('EINST.L_DIENST')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_DIENST_HILFE')) ?></p>
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(frw_t('EINST.L_TAKT')) ?></label>
-	<input data-role="none" type="number" name="takt_s" min="<?= (int) FRW_TAKT_MIN ?>" max="<?= (int) FRW_TAKT_MAX ?>" value="<?= (int) $frw_cfg['takt_s'] ?>">
+	<input data-role="none" type="number" name="takt_s" min="<?= (int) FRW_TAKT_MIN ?>" max="<?= (int) FRW_TAKT_MAX ?>" value="<?= frw_e(frw_x2_wert('einstellungen', 'takt_s', (int) $frw_cfg['takt_s'])) ?>"<?= frw_x2_mark('einstellungen', 'takt_s') ?>>
 	<p class="sm-hilfe"><?= frw_e(sprintf(frw_t('EINST.H_TAKT'), FRW_TAKT_VORGABE, FRW_TAKT_MIN, FRW_TAKT_MAX)) ?></p>
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(frw_t('EINST.L_TIMEOUT')) ?></label>
-	<input data-role="none" type="number" name="timeout_s" min="<?= (int) FRW_TIMEOUT_MIN ?>" max="<?= (int) FRW_TIMEOUT_MAX ?>" value="<?= (int) $frw_cfg['timeout_s'] ?>">
+	<input data-role="none" type="number" name="timeout_s" min="<?= (int) FRW_TIMEOUT_MIN ?>" max="<?= (int) FRW_TIMEOUT_MAX ?>" value="<?= frw_e(frw_x2_wert('einstellungen', 'timeout_s', (int) $frw_cfg['timeout_s'])) ?>"<?= frw_x2_mark('einstellungen', 'timeout_s') ?>>
 	<p class="sm-hilfe"><?= frw_e(sprintf(frw_t('EINST.H_TIMEOUT'), FRW_TIMEOUT_VORGABE, FRW_PAUSE_S)) ?></p>
+</div>
+<div class="sm-feld">
+	<label><input data-role="none" type="checkbox" name="stand_retten" value="1"<?= frw_x2_haken('einstellungen', 'stand_retten', !empty($frw_cfg['stand_retten'])) ?><?= frw_x2_mark('einstellungen', 'stand_retten') ?>><?= frw_e(frw_t('EINST.L_STAND_RETTEN')) ?></label>
+	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_STAND_RETTEN')) ?></p>
 </div>
 
 <h2><?= frw_e(frw_t('EINST.H_DM')) ?></h2>
 <p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_DM_HILFE')) ?></p>
 <div class="sm-feld">
 	<label><?= frw_e(sprintf(frw_t('EINST.L_DM'), 1)) ?></label>
-	<input data-role="none" type="text" name="dm1_adresse" value="<?= frw_e($frw_cfg['dm1_adresse']) ?>" placeholder="192.0.2.31">
+	<input data-role="none" type="text" name="dm1_adresse" value="<?= frw_e(frw_x2_wert('einstellungen', 'dm1_adresse', $frw_cfg['dm1_adresse'])) ?>"<?= frw_x2_mark('einstellungen', 'dm1_adresse') ?> placeholder="192.0.2.31">
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(sprintf(frw_t('EINST.L_DM'), 2)) ?></label>
-	<input data-role="none" type="text" name="dm2_adresse" value="<?= frw_e($frw_cfg['dm2_adresse']) ?>" placeholder="192.0.2.32">
+	<input data-role="none" type="text" name="dm2_adresse" value="<?= frw_e(frw_x2_wert('einstellungen', 'dm2_adresse', $frw_cfg['dm2_adresse'])) ?>"<?= frw_x2_mark('einstellungen', 'dm2_adresse') ?> placeholder="192.0.2.32">
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(sprintf(frw_t('EINST.L_DM'), 3)) ?></label>
-	<input data-role="none" type="text" name="dm3_adresse" value="<?= frw_e($frw_cfg['dm3_adresse']) ?>">
+	<input data-role="none" type="text" name="dm3_adresse" value="<?= frw_e(frw_x2_wert('einstellungen', 'dm3_adresse', $frw_cfg['dm3_adresse'])) ?>"<?= frw_x2_mark('einstellungen', 'dm3_adresse') ?>>
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(sprintf(frw_t('EINST.L_DM'), 4)) ?></label>
-	<input data-role="none" type="text" name="dm4_adresse" value="<?= frw_e($frw_cfg['dm4_adresse']) ?>">
+	<input data-role="none" type="text" name="dm4_adresse" value="<?= frw_e(frw_x2_wert('einstellungen', 'dm4_adresse', $frw_cfg['dm4_adresse'])) ?>"<?= frw_x2_mark('einstellungen', 'dm4_adresse') ?>>
 </div>
 
 <h2><?= frw_e(frw_t('EINST.H_GRUPPEN')) ?></h2>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="gruppe_wr" value="1"<?= !empty($frw_cfg['gruppe_wr']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_GRUPPE_WR')) ?></label>
+	<label><input data-role="none" type="checkbox" name="gruppe_wr" value="1"<?= frw_x2_haken('einstellungen', 'gruppe_wr', !empty($frw_cfg['gruppe_wr'])) ?><?= frw_x2_mark('einstellungen', 'gruppe_wr') ?>><?= frw_e(frw_t('EINST.L_GRUPPE_WR')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_GRUPPE_WR')) ?></p>
 </div>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="gruppe_energie" value="1"<?= !empty($frw_cfg['gruppe_energie']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_GRUPPE_ENERGIE')) ?></label>
+	<label><input data-role="none" type="checkbox" name="gruppe_energie" value="1"<?= frw_x2_haken('einstellungen', 'gruppe_energie', !empty($frw_cfg['gruppe_energie'])) ?><?= frw_x2_mark('einstellungen', 'gruppe_energie') ?>><?= frw_e(frw_t('EINST.L_GRUPPE_ENERGIE')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_GRUPPE_ENERGIE')) ?></p>
 </div>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="gruppe_speicher" value="1"<?= !empty($frw_cfg['gruppe_speicher']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_GRUPPE_SPEICHER')) ?></label>
+	<label><input data-role="none" type="checkbox" name="gruppe_speicher" value="1"<?= frw_x2_haken('einstellungen', 'gruppe_speicher', !empty($frw_cfg['gruppe_speicher'])) ?><?= frw_x2_mark('einstellungen', 'gruppe_speicher') ?>><?= frw_e(frw_t('EINST.L_GRUPPE_SPEICHER')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_GRUPPE_SPEICHER')) ?></p>
 </div>
 
 <h2><?= frw_e(frw_t('EINST.H_MELDUNGEN')) ?></h2>
 <p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_MELDUNGEN_HILFE')) ?></p>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="meldung_stoerung" value="1"<?= !empty($frw_cfg['meldung_stoerung']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_MELD_STOERUNG')) ?></label>
+	<label><input data-role="none" type="checkbox" name="meldung_stoerung" value="1"<?= frw_x2_haken('einstellungen', 'meldung_stoerung', !empty($frw_cfg['meldung_stoerung'])) ?><?= frw_x2_mark('einstellungen', 'meldung_stoerung') ?>><?= frw_e(frw_t('EINST.L_MELD_STOERUNG')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_MELD_STOERUNG')) ?></p>
 </div>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="meldung_ausfall" value="1"<?= !empty($frw_cfg['meldung_ausfall']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_MELD_AUSFALL')) ?></label>
+	<label><input data-role="none" type="checkbox" name="meldung_ausfall" value="1"<?= frw_x2_haken('einstellungen', 'meldung_ausfall', !empty($frw_cfg['meldung_ausfall'])) ?><?= frw_x2_mark('einstellungen', 'meldung_ausfall') ?>><?= frw_e(frw_t('EINST.L_MELD_AUSFALL')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(sprintf(frw_t('EINST.H_MELD_AUSFALL'), FRW_AUSFALL_MELDEN)) ?></p>
 </div>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="meldung_speicher" value="1"<?= !empty($frw_cfg['meldung_speicher']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_MELD_SPEICHER')) ?></label>
+	<label><input data-role="none" type="checkbox" name="meldung_speicher" value="1"<?= frw_x2_haken('einstellungen', 'meldung_speicher', !empty($frw_cfg['meldung_speicher'])) ?><?= frw_x2_mark('einstellungen', 'meldung_speicher') ?>><?= frw_e(frw_t('EINST.L_MELD_SPEICHER')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_MELD_SPEICHER')) ?></p>
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(frw_t('EINST.L_SCHWELLE_STREUUNG')) ?></label>
-	<input data-role="none" type="number" name="schwelle_soc_streuung" min="0" max="<?= (int) FRW_STREUUNG_MAX ?>" value="<?= (int) $frw_cfg['schwelle_soc_streuung'] ?>">
+	<input data-role="none" type="number" name="schwelle_soc_streuung" min="0" max="<?= (int) FRW_STREUUNG_MAX ?>" value="<?= frw_e(frw_x2_wert('einstellungen', 'schwelle_soc_streuung', (int) $frw_cfg['schwelle_soc_streuung'])) ?>"<?= frw_x2_mark('einstellungen', 'schwelle_soc_streuung') ?>>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_SCHWELLE_STREUUNG')) ?></p>
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(frw_t('EINST.L_SCHWELLE_ZELLEN')) ?></label>
-	<input data-role="none" type="number" name="schwelle_zellen_mv" min="0" max="<?= (int) FRW_ZELLEN_MV_MAX ?>" value="<?= (int) $frw_cfg['schwelle_zellen_mv'] ?>">
+	<input data-role="none" type="number" name="schwelle_zellen_mv" min="0" max="<?= (int) FRW_ZELLEN_MV_MAX ?>" value="<?= frw_e(frw_x2_wert('einstellungen', 'schwelle_zellen_mv', (int) $frw_cfg['schwelle_zellen_mv'])) ?>"<?= frw_x2_mark('einstellungen', 'schwelle_zellen_mv') ?>>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_SCHWELLE_ZELLEN')) ?></p>
 </div>
 
 <h2><?= frw_e(frw_t('EINST.H_EB')) ?></h2>
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="eb_anzeigen" value="1"<?= !empty($frw_cfg['eb_anzeigen']) ? ' checked' : '' ?>><?= frw_e(frw_t('EINST.L_EB')) ?></label>
+	<label><input data-role="none" type="checkbox" name="eb_anzeigen" value="1"<?= frw_x2_haken('einstellungen', 'eb_anzeigen', !empty($frw_cfg['eb_anzeigen'])) ?><?= frw_x2_mark('einstellungen', 'eb_anzeigen') ?>><?= frw_e(frw_t('EINST.L_EB')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_EB_HILFE')) ?></p>
+</div>
+<div class="sm-feld">
+	<label><input data-role="none" type="checkbox" name="json_ein" value="1"<?= frw_x2_haken('einstellungen', 'json_ein', !empty($frw_cfg['json_ein'])) ?><?= frw_x2_mark('einstellungen', 'json_ein') ?>><?= frw_e(frw_t('EINST.L_JSON')) ?></label>
+	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.H_JSON')) ?></p>
 </div>
 
 <div class="sm-knopfreihe">
 	<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern" value="1"><?= frw_e(frw_t('EINST.K_SPEICHERN')) ?></button>
+</div>
+</form>
+
+<h2><?= frw_e(frw_t('EINST.H_ANSAGE')) ?></h2>
+<div class="sm-step"><?= frw_e(frw_t('EINST.ANSAGE_ERKLAERUNG')) ?></div>
+<form action="index.php" method="post">
+	<?php echo frw_fmt(); ?>
+	<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+	<input data-role="none" type="hidden" name="formular" value="ansage">
+<?= ansage_formular_html(frw_tts($frw_cfg), array(
+    'w' => function ($n, $g) { return frw_x2_wert('ansage', $n, $g); },
+    'm' => function ($n) { return frw_x2_mark('ansage', $n); },
+    'c' => function ($n, $g) { return frw_x2_haken('ansage', $n, $g) !== ''; },
+    'modi' => frw_ansage_modi(),
+    'ziele' => frw_mit_zielen()), frw_ansage_k()) ?>
+<h3><?= frw_e(frw_t('EINST.ANSAGE_ANLAESSE')) ?></h3>
+<div class="sm-feld">
+	<label><input data-role="none" type="checkbox" name="ansage_stoerung" value="1"<?= frw_x2_haken('ansage', 'ansage_stoerung', !empty($frw_cfg['ansage_stoerung'])) ?><?= frw_x2_mark('ansage', 'ansage_stoerung') ?>><?= frw_e(frw_t('EINST.L_ANSAGE_STOERUNG')) ?></label>
+	<label><input data-role="none" type="checkbox" name="ansage_zellen" value="1"<?= frw_x2_haken('ansage', 'ansage_zellen', !empty($frw_cfg['ansage_zellen'])) ?><?= frw_x2_mark('ansage', 'ansage_zellen') ?>><?= frw_e(frw_t('EINST.L_ANSAGE_ZELLEN')) ?></label>
+	<p class="sm-hilfe"><?= frw_e(frw_t('EINST.ANSAGE_ANLAESSE_HILFE')) ?></p>
+</div>
+<?= ansage_regeln_html(frw_ansage_regeln($frw_cfg), array(), array(), array(
+    'w' => function ($n, $g) { return frw_x2_wert('ansage', $n, $g); },
+    'm' => function ($n) { return frw_x2_mark('ansage', $n); },
+    'c' => function ($n, $g) { return frw_x2_haken('ansage', $n, $g) !== ''; },
+    'token_vor_ort' => true), frw_ansage_k()) ?>
+<p class="sm-hilfe"><?= frw_e(sprintf(frw_t('EINST.ANSAGE_TEST_HINWEIS'), frw_t('REITER.TEST'))) ?></p>
+<div class="sm-knopfreihe">
+	<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_speichern" value="1"><?= frw_e(frw_t('EINST.K_ANSAGE_SPEICHERN')) ?></button>
 </div>
 </form>
 
@@ -587,12 +782,12 @@ if (!$frw_dms) {
 	<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 	<input data-role="none" type="hidden" name="formular" value="mqtt">
 <div class="sm-feld">
-	<label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= !empty($frw_cfg['mqtt_ein']) ? ' checked' : '' ?>><?= frw_e(frw_t('MQTT.L_EIN')) ?></label>
+	<label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= frw_x2_haken('mqtt', 'mqtt_ein', !empty($frw_cfg['mqtt_ein'])) ?><?= frw_x2_mark('mqtt', 'mqtt_ein') ?>><?= frw_e(frw_t('MQTT.L_EIN')) ?></label>
 	<p class="sm-hilfe"><?= frw_e(frw_t('MQTT.H_EIN')) ?></p>
 </div>
 <div class="sm-feld">
 	<label><?= frw_e(frw_t('MQTT.L_PRAEFIX')) ?></label>
-	<input data-role="none" type="text" name="mqtt_praefix" value="<?= frw_e($frw_pf) ?>" placeholder="<?= frw_e(FRW_MQTT_PRAEFIX_VORGABE) ?>">
+	<input data-role="none" type="text" name="mqtt_praefix" value="<?= frw_e(frw_x2_wert('mqtt', 'mqtt_praefix', $frw_pf)) ?>"<?= frw_x2_mark('mqtt', 'mqtt_praefix') ?> placeholder="<?= frw_e(FRW_MQTT_PRAEFIX_VORGABE) ?>">
 	<p class="sm-hilfe"><?= frw_e(frw_t('MQTT.H_PRAEFIX')) ?></p>
 </div>
 <div class="sm-knopfreihe">
@@ -672,6 +867,9 @@ foreach (($frw_dms ? array_keys($frw_dms) : array(1)) as $frw_n) {
 <p><span class="sm-mono"><?= frw_e(frw_endpunkt_adresse($frw_host, $frw_n)) ?></span></p>
 <?php } ?>
 <p class="sm-hilfe"><?= frw_e(frw_t('LOX.HTTP_MUSTER')) ?> <span class="sm-mono"><?= frw_e(frw_check('WR1_STATUS')) ?></span></p>
+<?php if (!empty($frw_cfg['json_ein'])) { ?>
+<p class="sm-hilfe"><?= frw_e(frw_t('LOX.JSON_TEXT')) ?> <span class="sm-mono"><?= frw_e('http://' . $frw_host . '/plugins/' . $frw_p['plugin'] . '/index.php?aktion=json') ?></span></p>
+<?php } ?>
 <p class="sm-hilfe"><?= frw_e(frw_t('LOX.VORLAGE_TEXT')) ?></p>
 <?php foreach (($frw_dms ? array_keys($frw_dms) : array(1)) as $frw_n) { ?>
 <form action="index.php" method="post">
@@ -721,7 +919,7 @@ foreach (($frw_dms ? array_keys($frw_dms) : array(1)) as $frw_n) {
 <!-- ================= Test ================= -->
 <div class="sm-seite<?= $frw_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?= frw_e(frw_t('TEST.H')) ?></h2>
-<div class="sm-legende"><span><i class="sm-punkt sm-b-lesen"></i> <?= frw_e(frw_t('LEGENDE.LESEN')) ?></span></div>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-lesen"></i> <?= frw_e(frw_t('LEGENDE.LESEN')) ?></span> <span><i class="sm-punkt sm-b-aktion"></i> <?= frw_e(frw_t('LEGENDE.AKTION')) ?></span></div>
 <?php
 $frw_zeilen = array();
 $frw_zeilen[] = array(frw_t('TEST.F_KONFIG'), frw_pruef_konfiguration());
@@ -812,6 +1010,16 @@ foreach ($frw_zeilen as $frw_z) {
 <?php } ?>
 </table>
 <?php } ?>
+
+<h3><?= frw_e(frw_t('TEST.H_ANSAGE')) ?></h3>
+<form action="index.php" method="post">
+	<?php echo frw_fmt(); ?>
+	<input data-role="none" type="hidden" name="activetab" value="tab-test">
+	<input data-role="none" type="hidden" name="formular" value="ansagetest">
+	<div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?= frw_e(frw_t('TEST.K_ANSAGE')) ?></button>
+<?php if (frw_mit_zielen()) { echo ansage_testknoepfe_html(frw_tts($frw_cfg), frw_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?></div>
+</form>
+<?php if ($frw_tab === 'tab-test') { echo frw_ansage_lage_html($frw_cfg); } else { ?><div class="sm-hilfe"><?= frw_e(frw_t('TEST.EP_NUR_OFFEN')) ?></div><?php } ?>
 
 <?php if (!empty($frw_cfg['eb_anzeigen'])) { $frw_eb = frw_eb_zustand(); ?>
 <h3><?= frw_e(frw_t('EB.H')) ?></h3>

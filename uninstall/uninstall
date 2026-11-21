@@ -6,11 +6,22 @@
 # VERZEICHNISSE. Die Zweitschrift DANEBEN traegt das Aktionstoken und die
 # Adressen der Datamanager; sie wird hier entfernt. Der Ordnername kommt NUR
 # aus $3 (sonst die Vorgabe), nie aus dem Ablageort (Regeln/06).
+#
+# 0.9.7 (fremder Pruefer F4): plugininstall.pl ruft beim Deinstallieren JEDES data/system/uninstall/<NAME>* auf
+# (Geraet/2026-09-28/08_plugininstall.pl:1570, glob("$lbhomedir/data/system/uninstall/$pname*")) und uebergibt als $2
+# den NAMEN, als $3 den Ordner des deinstallierten Plugins. Ein Plugin, dessen Name ein Praefix von "froniuswaechter"
+# ist, riefe dieses Skript mit seinem eigenen Ordner - es loeschte dann dessen Datenordner und Zweitschrift
+# (nachgestellt, Fall N4). Gehoert der Name nicht zu diesem Plugin, wird nichts angefasst (Bauart Marstek Venus E
+# 1.1.25, Fensterbilanz 0.12.19). Ein Ordnername "." gilt wie in Fensterbilanz 0.12.37 als unzulaessig.
+if [ -n "$2" ] && [ "$2" != "froniuswaechter" ]; then
+    echo "<INFO> Deinstallation von '$2' - betrifft Fronius-Waechter nicht, nichts getan."
+    exit 0
+fi
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-froniuswaechter}"
 case "$PFOLDER" in
-    ''|*/*|*..*|system)
+    ''|.|*/*|*..*|system)
         echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts entfernt."
         exit 0 ;;
 esac
@@ -27,14 +38,35 @@ if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugi
 fi
 CP="$BASE/config/plugins/$PFOLDER"
 DP="$BASE/data/plugins/$PFOLDER"
-for F in "$CP.backup.json"* "$CP.kaputt.json"* "$DP.upgrade_laeuft"; do
+# 0.9.7 (fremder Pruefer F8): die zurueckbehaltenen Themen leeren, solange Stand und bin/ noch da sind (Bauart
+# Fensterbilanz 0.12.37 und Marstek Venus E): frw_dienst.php --mqtt-leeren, als loxberry, wenn dieses Skript als root
+# laeuft, stdin geschlossen, nach 60 s SIGTERM und nach weiteren 5 s SIGKILL. Bis 0.9.6 stand hier nur der Rat, im
+# Broker von Hand aufzuraeumen.
+PBIN="$BASE/bin/plugins/$PFOLDER"
+FRW_RC=0
+if command -v php >/dev/null 2>&1 && [ -f "$PBIN/frw_dienst.php" ]; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "$(printf '%q ' env "LBHOMEDIR=$BASE" timeout -k 5 60 php "$PBIN/frw_dienst.php" --mqtt-leeren)" \
+            < /dev/null 2>&1 || FRW_RC=$?
+    else
+        env "LBHOMEDIR=$BASE" timeout -k 5 60 php "$PBIN/frw_dienst.php" --mqtt-leeren < /dev/null 2>&1 || FRW_RC=$?
+    fi
+    case "$FRW_RC" in
+        0|1|2) ;;
+        124|137) echo "<WARNING> MQTT: das Leeren der zurueckbehaltenen Themen wurde nach 60 s abgebrochen - unter dem Praefix des Plugins kann noch etwas im Broker stehen. Von Hand: mosquitto_pub -r -n -t <thema>" ;;
+        *) echo "<WARNING> MQTT: das Leeren der zurueckbehaltenen Themen endete unerwartet (Rueckgabe $FRW_RC)." ;;
+    esac
+else
+    echo "<INFO> php oder bin/plugins/$PFOLDER/frw_dienst.php fehlt - zurueckbehaltene MQTT-Themen wurden nicht geleert."
+fi
+for F in "$CP.backup.json"* "$CP.kaputt.json"* "$DP.upgrade_laeuft" "$DP.stand.json"; do
     if [ -e "$F" ] || [ -L "$F" ]; then
         rm -f "$F" 2>/dev/null
     fi
 done
 rm -rf "${DP:?}" 2>/dev/null
 REST=""
-for F in "$CP.backup.json"* "$CP.kaputt.json"* "$DP.upgrade_laeuft" "$DP"; do
+for F in "$CP.backup.json"* "$CP.kaputt.json"* "$DP.upgrade_laeuft" "$DP.stand.json" "$DP"; do
     if [ -e "$F" ] || [ -L "$F" ]; then
         REST="$REST $F"
     fi
@@ -45,6 +77,4 @@ else
     echo "<WARNING> Fronius-Waechter entfernt, aber diese Dateien liessen sich nicht loeschen:$REST"
     echo "<WARNING> Sie koennen das Aktionstoken enthalten - bitte von Hand entfernen."
 fi
-echo "<INFO> Zurueckbehaltene MQTT-Werte (Status, Fehlercode, Stoerung, Modulzustand) bleiben im Broker,"
-echo "<INFO> bis sie jemand loescht; die Eingaenge in Loxone bekommen keine neuen Werte mehr."
 exit 0

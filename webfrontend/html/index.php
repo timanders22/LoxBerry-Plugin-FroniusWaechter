@@ -9,6 +9,8 @@
  *   ?aktion=jetzt&token=T        ausloesend: Merker "beim naechsten
  *                                Minutenlauf abrufen" - verlangt das Token
  *   ?selftest=1&token=T          beantwortet die Tokenfrage, loest nichts aus
+ *   ?aktion=json                 offen (abfragend), nur mit dem Haken json_ein
+ *                                (ab Werk aus, seit 0.9.7): der Stand kompakt
  *
  * Ohne eingerichtetes Token lehnt jeder ausloesende Aufruf ab; der
  * unangemeldete Endpunkt legt nichts an (frw_config(false), Regeln/05).
@@ -82,6 +84,14 @@ if ($frw_ep_aktion === 'jetzt') {
         frw_ep_ende(500, 'JETZT;OK=0;ERR=SCHREIBEN');
     }
     frw_ep_ende(200, 'JETZT;OK=1');
+}
+
+/* 0.9.7 (Erweiterung E3): kompakte Abfrage als JSON - lesend, offen wie aktion=status, nur mit dem Haken json_ein
+   (ab Werk aus). Ohne Haken antwortet der Endpunkt wie bis 0.9.6. */
+if ($frw_ep_aktion === 'json' && $frw_ep_c !== null && !empty($frw_ep_c['json_ein'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    list($frw_ep_code, $frw_ep_js) = frw_json_kurz(frw_stand_lesen(), $frw_ep_c);
+    frw_ep_ende($frw_ep_code, $frw_ep_js);
 }
 
 frw_ep_ende(400, 'FRW;OK=0;ERR=AKTION_UNBEKANNT');

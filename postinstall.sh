@@ -9,12 +9,17 @@ ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-froniuswaechter}"
 BASE="${ARGV5:-$LBHOMEDIR}"
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    SELF=$(cd "$(dirname "$0")" && pwd)
-    BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
+# 0.9.7 (fremder Pruefer F1): die Wurzel gilt nur mit config/plugins, data/plugins und config/system/general.json,
+# dieselbe Pruefung wie in preinstall.sh und preupgrade.sh. Bis 0.9.6 genuegte ein vorhandenes Verzeichnis, sonst
+# galt $SELF/../.. - aus einem ausgepackten Archiv in einem fremden Baum legte das Skript dort config/, log/ und data/
+# samt Konfiguration an (nachgestellt 21.11.2026, Pruefung-FroniusWaechter-0.9.7, Fall N1). Ohne Wurzel: nichts.
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ] \
+   || [ ! -f "$BASE/config/system/general.json" ]; then
+    echo "<WARNING> Kein LoxBerry-Wurzelverzeichnis erkannt ('$BASE') - nichts angelegt, nichts zurueckgespielt."
+    exit 1
 fi
 case "$PFOLDER" in
-    ''|*/*|*..*) echo "<FAIL> Unzulaessiger Ordnername '$PFOLDER'."; exit 1 ;;
+    ''|.|*/*|*..*) echo "<FAIL> Unzulaessiger Ordnername '$PFOLDER'."; exit 1 ;;
 esac
 
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
@@ -41,6 +46,22 @@ KAP="$BASE/config/plugins/$PFOLDER.kaputt.json"
 [ -f "$CF" ] || echo '{}' > "$CF"
 chmod 600 "$CF" 2>/dev/null
 
+# 0.9.7 (fremder Pruefer F3): zs_hinlegen wortgleich aus preupgrade.sh - Kopie als <Ziel>.neu.<pid>, 0600 BEVOR
+# Inhalt hineinkommt, mit cmp geprueft, erst dann an ihren Platz. Bis 0.9.6 ging die Zweitschrift mit cp -p
+# unmittelbar auf die Konfiguration, und "<OK>" folgte dem Rueckgabewert von cp, ohne nachzusehen (nachgestellt mit
+# einem cp, das 0 liefert und nichts schreibt: Meldung OK, Konfiguration ohne Aktionstoken, Fall N3).
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
 mit_inhalt() {   # 0 = ja, 1 = leer, 3 = ohne verwertbaren Stand, 2 = nicht pruefbar
     [ -s "$1" ] || return 1
     php -r '$r = (string) @file_get_contents($argv[1]); $d = json_decode($r, true);
@@ -59,7 +80,7 @@ if [ "$UPGRADE" = 1 ] && [ -f "$BK" ]; then
     if [ "$CF_RC" = 1 ] || [ "$CF_RC" = 3 ]; then
         mit_inhalt "$BK"; BK_RC=$?
         if [ "$BK_RC" = 0 ]; then
-            if cp -p "$BK" "$CF" 2>/dev/null && chmod 600 "$CF" 2>/dev/null; then
+            if zs_hinlegen "$BK" "$CF"; then
                 echo "<OK> Konfiguration aus der Zweitschrift wiederhergestellt."
             else
                 echo "<WARNING> Die Zweitschrift liess sich nicht zurueckspielen: $BK"

@@ -13,7 +13,7 @@ ARGV5=$5
 PFOLDER="${ARGV3:-froniuswaechter}"
 BASE="${ARGV5:-$LBHOMEDIR}"
 case "$PFOLDER" in
-    ''|*/*|*..*) echo "<FAIL> Unzulaessiger Ordnername '$PFOLDER' - nichts gesichert, das Update wird abgebrochen."; exit 2 ;;
+    ''|.|*/*|*..*) echo "<FAIL> Unzulaessiger Ordnername '$PFOLDER' - nichts gesichert, das Update wird abgebrochen."; exit 2 ;;
 esac
 if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ] \
    || [ ! -f "$BASE/config/system/general.json" ]; then
@@ -21,7 +21,9 @@ if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugi
     exit 2
 fi
 # Als Erstes die Upgrade-Marke: preinstall.sh und postinstall.sh erkennen eine
-# Aktualisierung allein an ihr; der Dienst ruht, solange sie juenger als 15 min ist.
+# Aktualisierung allein an ihr; der Minutentakt (cron.01min) und der Dienst (frw_upgrade_laeuft(), FRW_MARKE_FRIST)
+# ruhen, solange sie juenger als 3600 s ist (bis 0.9.6 nannte dieser Kommentar eine Viertelstunde; der Code galt
+# schon 3600 s, fremder Pruefer F2).
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
 if date +%s > "$MARKE" 2>/dev/null; then
     echo "<OK> Upgrade-Marke gesetzt: $MARKE"
@@ -102,5 +104,22 @@ case "$?" in
     echo "<WARNING> Der Inhalt von $CF liess sich nicht pruefen (fehlt php?). Die Zweitschrift bleibt unveraendert: $BK"
     ;;
 esac
+# 0.9.7 (fremder Pruefer F11): den letzten Stand der Abrufe neben den Datenordner legen - nur mit dem Haken "Stand der
+# Abrufe ueber ein Update behalten" (stand_retten, ab Werk aus). Der Installer raeumt data/plugins/<ordner>/ beim
+# Update ab; ohne den Stand ist der erste Lauf danach ein erster Lauf, und eine Stoerung, die waehrend des Updates
+# beginnt, wird nie gemeldet (frw_meldungen_ermitteln() meldet nur Wechsel). postupgrade.sh holt ihn zurueck. Ein
+# liegengebliebener Stand eines abgebrochenen Updates wird vorher entfernt - er gehoert zu keinem Lauf mehr.
+SN="$BASE/data/plugins/$PFOLDER.stand.json"
+SJ="$BASE/data/plugins/$PFOLDER/stand.json"
+rm -f "$SN" 2>/dev/null
+if [ -f "$SJ" ] && php -r '$d = json_decode((string) @file_get_contents($argv[1]), true);
+        exit((is_array($d) && isset($d["stand_retten"]) && in_array($d["stand_retten"], array(1, "1", true), true)) ? 0 : 1);' -- "$CF" 2>/dev/null; then
+    if zs_hinlegen "$SJ" "$SN"; then
+        echo "<OK> Stand der Abrufe fuer das Update beiseitegelegt: $SN"
+    else
+        rm -f "$SN" 2>/dev/null
+        echo "<WARNING> Der Stand der Abrufe liess sich nicht beiseitelegen - nach dem Update beginnt er neu."
+    fi
+fi
 echo "<OK> preupgrade abgeschlossen."
 exit 0
