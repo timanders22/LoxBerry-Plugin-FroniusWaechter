@@ -194,7 +194,11 @@ function frw_sprachdatei()
     if ($p['lbhome'] !== '') {
         $kand[] = $p['lbhome'] . '/templates/plugins/' . $p['plugin'];
     }
-    $kand[] = dirname(dirname(dirname(__DIR__))) . '/templates/plugins/' . basename(__DIR__);
+    /* 0.9.8 (Nebenbefund Pruefung-FroniusWaechter-0.9.8): installiert liegt diese Datei unter
+     * <LB>/webfrontend/html/plugins/<ordner> - vier Ebenen bis <LB>. Bis 0.9.7 waren es drei, der Kandidat zeigte
+     * auf <LB>/webfrontend/templates/... und traf nie; ohne LBHOMEDIR und general.json fiel die Suche auf den
+     * Archivpfad zurueck. */
+    $kand[] = dirname(dirname(dirname(dirname(__DIR__)))) . '/templates/plugins/' . basename(__DIR__);
     $kand[] = dirname(dirname(__DIR__)) . '/templates';
     $t = $kand[count($kand) - 1];
     foreach ($kand as $k) {

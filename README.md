@@ -1,6 +1,10 @@
 # Fronius-Wächter
 
-Version 0.9.7 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+Version 0.9.8 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+
+## Neu in 0.9.8
+
+- **Berichtigt – Sprachdatei im installierten Zustand ohne LoxBerry-Wurzel:** Findet die Oberfläche weder `LBHOMEDIR` noch die `general.json`, sucht sie die Sprachdatei über den eigenen Pfad. Dieser Pfad war bis 0.9.7 eine Ebene zu kurz und zeigte auf `webfrontend/templates/…` statt auf `templates/plugins/…`; die Suche fiel dann auf den Pfad des entpackten Archivs zurück, und der Selbsttest meldete einen Fehlschlag bei den Ansagen. Mit gesetztem `LBHOMEDIR` – dem Regelfall – war nichts zu merken. Gemessen auf dem Arbeitsrechner (PHP 7.4 und 8.4, nachgebildete Installation); am Gerät nicht gemessen.
 
 ## Neu in 0.9.7
 
