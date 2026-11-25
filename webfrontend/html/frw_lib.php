@@ -26,10 +26,12 @@
  * 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den anderen Linien. Die
  * Beschreibung dieser Linie steht in frw_sicherung_beschreibung(). */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 0.9.10, Regeln/07)
 /* 0.9.7 (Erweiterung E1): das gemeinsame Sprachmodul (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, byte-gleich,
  * gemeinsam_pruefen.py). Sprachansagen bei einer Stoerung und beim Ueberschreiten der Zellspannungsschwelle - beide
  * Anlaesse ab Werk aus; Nachtruhe, Sperre und der Schalter "Ansagen aus" (haus/ansage/ruhe) stehen im Modul. */
 require_once __DIR__ . '/sprachausgabe.php';
+require_once __DIR__ . '/meldung.php';     // Statusmeldungen an SignalBot (seit 0.9.10)
 
 /* ------------------------------------------------------------------
  * Grenzen - jede steht genau hier (Regeln/04).
@@ -152,6 +154,7 @@ function frw_vorgaben()
         'eb_anzeigen'      => 0,
         'ansage_stoerung'  => 0,   // 0.9.7 (E1): Stoerung eines Wechselrichters ansagen
         'ansage_zellen'    => 0,   // 0.9.7 (E1): Zellspannungsschwelle ansagen
+        'meldung'          => meld_vorgaben(frw_meld_anlaesse(), frw_meld_haken_vorgabe()),   // 0.9.10: Meldungen an SignalBot, ab Werk aus
         'tts'              => ansage_werk_block(),        // Block des Moduls (Bauart der Linien, Hausentscheidung 01.11.2026)
         'ansage_regeln'    => ansage_regeln_vorgaben(),   // Nachtruhe, Sperre, Tafel, HomePod
         'ansage_token_herkunft' => array(),               // Vermerk des Moduls, nie aus einer Sicherung
@@ -425,6 +428,11 @@ function frw_config($erzeugen = true)
                 list($ok, $wert) = frw_wert_pruefen($k, $d[$k]);
                 if ($ok) {
                     $c[$k] = $wert;
+                } elseif ($k === 'aktionstoken' && is_string($d[$k]) && $d[$k] !== '') {
+                    /* 0.9.10 (Lade-Beanstandungen, Regeln/05, Entscheidung des Hausherrn 24.11.2026 Punkt 2): ein
+                       formwidriges Token gilt bis zur Berichtigung weiter und wird gemeldet (frw_lade_beanstandungen(),
+                       nie mit Wert) - nie ersetzt. Bis hier galt dann '' und der Endpunkt wies jede Adresse ab. */
+                    $c[$k] = $d[$k];
                 } else {
                     $abgewiesen[] = $k;
                 }
@@ -443,17 +451,114 @@ function frw_config($erzeugen = true)
        array_key_exists() (Regeln/05). */
     if ($erzeugen && !$je_gesetzt) {
         $c['aktionstoken'] = frw_token_erzeugen();
-        if (frw_config_speichern($c)) {
+        /* 0.9.10 (Lade-Beanstandungen, Regeln/05 "Vervollstaendigen, Bauform Docker NG"): geschrieben werden die WERTE
+           AUS DER DATEI plus das neue Token; frw_config_speichern() ergaenzt die fehlenden Vorgaben. Bis hier die
+           normierte Konfiguration $c - jeder abgewiesene Wert stand danach als Vorgabe in der Datei. */
+        $frw_tneu = is_array($d) ? $d : array();
+        $frw_tneu['aktionstoken'] = $c['aktionstoken'];
+        if (frw_config_speichern($frw_tneu)) {
             frw_log('Aktionstoken angelegt (erste Einrichtung).');
         }
     }
     return $c;
 }
 
-function frw_config_speichern(array $c, &$zweit = null)
+/* ------------------------------------------------------------------
+ * Lade-Beanstandungen (0.9.10; Regeln/05, Sicherungsmodul 1.3.0)
+ *
+ * Ergaenzt die eigene Meldung abgewiesener Werte (frw_config_abgewiesen(), Reiter Test TEST.F_WERTE) um die
+ * einheitliche Form aller Linien: gelber Kasten, eigene Zeile mit Feld, gespeichertem und verwendetem Wert, "Dateiwert
+ * behalten" beim Speichern, Knopf "Angezeigte Werte uebernehmen", eine Protokollzeile je Aenderung. Nie
+ * zurueckgeschrieben.
+ * ------------------------------------------------------------------ */
+
+/** Die rohen Werte von froniuswaechter.json (ohne jede Normierung), null = keine lesbare Datei. Schreibt nichts. */
+function frw_lade_roh()
+{
+    $p = frw_paths();
+    clearstatcache(true, $p['cfgdatei']);
+    return frw_json_lesen($p['cfgdatei']);
+}
+
+/** Die Beschreibung fuer die Lade-Beanstandungen. Geprueft wird wie in frw_config() (frw_wert_pruefen()) - nicht wie beim
+ *  Zurueckspielen, das im Block tts jedes Sprechtoken abweist. Geheim: die Sprechtoken (aktionstoken immer).
+ *  $maskiert = true fuer den gelben Kasten (gibt die Saetze unmittelbar aus), false fuer Reiter Test und Meldungen (die
+ *  Seite maskiert bei der Ausgabe). */
+function frw_lade_b($maskiert = true)
+{
+    $b = frw_sicherung_beschreibung();
+    foreach (array_keys($b['schluessel']) as $frw_k) {
+        unset($b['schluessel'][$frw_k]['pruefen']);
+    }
+    unset($b['quer']);
+    $b['pruefen'] = function ($k, $w) use ($maskiert) {
+        $e = frw_wert_pruefen($k, $w);
+        return $e[0] ? '' : ($maskiert ? frw_e($e[2]) : (string) $e[2]);
+    };
+    $b['geheim'] = array_map(function ($n) {
+        return 'tts.' . $n;
+    }, ansage_geheim());
+    $b['e'] = $maskiert ? 'frw_e' : function ($s) {
+        return (string) $s;
+    };
+    return $b;
+}
+
+/** Die Lade-Beanstandungen: rohe Dateiwerte gegen den verwendeten Stand ($cfg, sonst frw_config(false)). */
+function frw_lade_beanstandungen($cfg = null, $maskiert = true)
+{
+    $d = frw_lade_roh();
+    $v = is_array($cfg) ? $cfg : frw_config(false);
+    if (!is_array($d) || !is_array($v)) {
+        return array();
+    }
+    return sicherung_lade_beanstandungen(frw_lade_b($maskiert), $d, $v);
+}
+
+/** Vor dem Schreiben: jedes beanstandete Feld, das $c nicht geaendert hat, bekommt seinen Dateiwert zurueck. */
+function frw_lade_behalten(array $c)
+{
+    $d = frw_lade_roh();
+    $v = frw_config(false);
+    if (!is_array($d) || !is_array($v)) {
+        return $c;
+    }
+    list($c, ) = sicherung_lade_behalten($c, $d, $v, sicherung_lade_beanstandungen(frw_lade_b(false), $d, $v));
+    return $c;
+}
+
+/** Dienst (bin/frw_dienst.php, jede Minute): fehlende Einstellungen eintragen, dann die Lade-Beanstandungen einmal
+ *  melden. Rueckgabe wie frw_config_vervollstaendigen(). */
+function frw_dienst_pflege()
+{
+    $r = frw_config_vervollstaendigen();
+    frw_lade_melden(frw_lade_beanstandungen());     // Kennung D
+    return $r;
+}
+
+/** Einmal je Aenderung ins Protokoll (nur Namen und Gruende, nie Werte). */
+function frw_lade_melden(array $beanst)
+{
+    $d = frw_paths()['datadir'];
+    if ($d === '' || (!is_dir($d) && !@mkdir($d, 0775, true))) {
+        return;
+    }
+    if (sicherung_lade_melden_faellig($beanst, $d . '/lade_beanstandungen.merk')) {
+        frw_log(sicherung_lade_protokollzeile($beanst));
+    }
+}
+
+function frw_config_speichern(array $c, &$zweit = null, $lade_behalten = true)
 {
     $p = frw_paths();
     $zweit = false;
+    /* 0.9.10 (Lade-Beanstandungen, Regeln/05, Entscheidung des Hausherrn "Dateiwert behalten"): ein beim Laden
+       beanstandetes Feld, das der neue Stand nicht geaendert hat, behaelt seinen gespeicherten Wert - jeder Speicherweg
+       liest frw_config(), aendert einen Teil und schreibt hier ganz zurueck. Nicht beim Zurueckspielen und nicht beim
+       Knopf "Angezeigte Werte uebernehmen" ($lade_behalten = false). */
+    if ($lade_behalten) {
+        $c = frw_lade_behalten($c);
+    }
     $voll = frw_vorgaben();
     foreach ($voll as $k => $v) {
         if (array_key_exists($k, $c)) {
@@ -586,6 +691,10 @@ function frw_wert_pruefen($k, $w)
        Sprechen und beim Zurueckspielen, Bauart Pumpenwacht 1.0.27); die Regeln prueft ansage_regeln_wert(). */
     if ($k === 'tts' || $k === 'ansage_token_herkunft') {
         return is_array($w) ? array(true, $w, '') : array(false, null, sprintf(frw_t('SICH.WERT_FORM'), $k));
+    }
+    if ($k === 'meldung') {     // 0.9.10: Block der Meldungen an SignalBot (gemeinsames Modul meldung.php)
+        $f = meld_block_pruefen($w, frw_meld_anlaesse());
+        return !$f ? array(true, $w, '') : array(false, null, meld_beanstandung_text($f[0], frw_meld_k()));
     }
     if ($k === 'ansage_regeln') {
         $g = '';
@@ -745,6 +854,7 @@ function frw_sicherung_beschreibung()
     foreach (array('ansage_stoerung', 'ansage_zellen', 'ansage_token_herkunft') as $k) {
         $schluessel[$k]['fehlt'] = 'behalten';
     }
+    $schluessel['meldung'] = meld_sicherung_knoten(frw_meld_anlaesse(), frw_meld_k());     // 0.9.10
     return array(
         'kennzeichen' => 'LoxBerry-Plugin-FroniusWaechter',
         'kennzeichen_frueher_muster' => '/^froniuswaechter [0-9]+(\.[0-9]+)+\z/',
@@ -776,7 +886,11 @@ function frw_sicherung_beschreibung()
         'jetzt' => function () {
             $c = frw_config(false);
             $w = frw_json_lesen(frw_paths()['cfgdatei']);
-            return (is_array($c) ? $c : frw_vorgaben()) + (is_array($w) ? $w : array());
+            $c = is_array($c) ? $c : frw_vorgaben();
+            /* 0.9.10: der Block 'meldung' wie er in der Datei steht - frw_config() setzt einen Block mit fremdem
+             * Unterschluessel ganz auf die Vorgabe (gemeldet), das Zurueckspielen soll den Namen aber nennen. */
+            if (is_array($w) && isset($w['meldung']) && is_array($w['meldung'])) { $c['meldung'] = $w['meldung']; }
+            return $c + (is_array($w) ? $w : array());
         },
         't' => 'frw_t',
         'e' => 'frw_e',
@@ -1861,6 +1975,7 @@ function frw_takt($holen = null, $warte = null, $sender = null, $jetzt = null)
     $letzte = (isset($alt['letzte']) && is_array($alt['letzte'])) ? $alt['letzte'] : array();
     $voll_ts = isset($alt['voll_ts']) ? (int) $alt['voll_ts'] : 0;
     $praefix = frw_mqtt_praefix($c);
+    frw_praefix_haus_melden($c);   // 0.9.10: Praefix im gemeinsamen Bereich? melden, nicht anhalten
     $voll = $voll_ts <= 0 || $jetzt - $voll_ts >= FRW_VOLLVERSAND || $jetzt < $voll_ts
         || !isset($alt['praefix']) || $alt['praefix'] !== $praefix;
     if (!empty($c['mqtt_ein'])) {
@@ -2127,7 +2242,7 @@ function frw_ansage_eintraege(array $alt, array $stand, array $c)
             continue;
         }
         $gilt = !empty($dm['ok']);
-        if (!empty($c['ansage_stoerung']) && isset($dm['wr']) && is_array($dm['wr'])) {
+        if (frw_meld_will('stoerung', $c) && isset($dm['wr']) && is_array($dm['wr'])) {     // 0.9.10: Ansage oder Meldung
             foreach ($dm['wr'] as $id => $w) {
                 $s = 'stoerung:' . (int) $n . ':' . (int) $id;
                 $war = !empty($alt[$s]);
@@ -2145,7 +2260,7 @@ function frw_ansage_eintraege(array $alt, array $stand, array $c)
                 }
             }
         }
-        if (!empty($c['ansage_zellen']) && $schwelle > 0 && isset($dm['sp']) && is_array($dm['sp'])) {
+        if (frw_meld_will('zellen', $c) && $schwelle > 0 && isset($dm['sp']) && is_array($dm['sp'])) {     // 0.9.10: Ansage oder Meldung
             foreach ($dm['sp'] as $sid => $sp) {
                 $s = 'zellen:' . (int) $n . ':' . (int) $sid;
                 $war = !empty($alt[$s]);
@@ -2288,7 +2403,7 @@ function frw_ansage_lauf(array $stand, array $c, $starten = true, $jetzt = null)
         return 0;
     }
     $datei = $p['datadir'] . '/ansage_zustand.json';
-    if (!frw_ansage_an($c) || (empty($c['ansage_stoerung']) && empty($c['ansage_zellen']))) {
+    if ((!frw_ansage_an($c) || (empty($c['ansage_stoerung']) && empty($c['ansage_zellen']))) && !frw_meld_aktiv($c)) {     // 0.9.10: auch fuer die Meldung an SignalBot
         if (is_file($datei)) {
             @unlink($datei);
         }
@@ -2337,6 +2452,8 @@ function frw_ansage_senden($jetzt = null)
     if ($frisch) {
         frw_ansage_token_pflegen();
         $c = frw_config(false);
+        frw_meld_senden($frisch, $c);     // 0.9.10: dieselben Anlaesse an SignalBot (eigene Haken)
+        $frisch = frw_meld_nur_ansage($frisch, $c);     // die Ansage nur mit ihrem eigenen Haken
         $a = ansage_regel_sprechen($frisch, frw_ansage_vor_ort($c), frw_ansage_regeln($c), frw_ansage_k());
         $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
         if ($a['r'] !== null) {
@@ -3071,4 +3188,155 @@ function frw_selbsttest()
         && $vg['meldung_speicher'] === 0 && $vg['schwelle_soc_streuung'] === 0 && $vg['schwelle_zellen_mv'] === 0 && $vg['eb_anzeigen'] === 0,
         'Ab Werk aus: Dienst, Speichergruppe, drei Meldungen, zwei Schwellen, Einspeisebremse-Anzeige');
     return array($zeilen, $faelle, $fehl);
+}
+
+/**
+ * 0.9.10 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function frw_pruef_praefix_haus($cfg)
+{
+    $p = frw_mqtt_praefix($cfg);
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(!empty($cfg['mqtt_ein']))) {
+            return array(-1, sprintf(frw_t('HAUSBEREICH.A_AUS'), strval($p), strval($b)));
+        }
+        return array(0, sprintf(frw_t('HAUSBEREICH.A_NEIN'), strval($p), strval($b)));
+    }
+    return array(1, sprintf(frw_t('HAUSBEREICH.A_JA'), strval($p)));
+}
+
+/**
+ * 0.9.10: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich faellt; der
+ * Versand bleibt, wie er ist. Gemerkt in praefix_haus_gemeldet.txt im Datenordner. Rueckgabe der Bereich oder ''.
+ */
+function frw_praefix_haus_melden($cfg, $merk = null)
+{
+    $p = frw_mqtt_praefix($cfg);
+    if ($merk === null) {
+        $merk = frw_paths()['datadir'] . '/praefix_haus_gemeldet.txt';
+    }
+    $b = hb_melden_faellig($p, $merk);
+    if ($b !== '') {
+        frw_log(hb_logtext($p, $b));
+    }
+    return $b;
+}
+
+/* ---------------- Statusmeldungen an SignalBot (0.9.10, gemeinsames Modul meldung.php) ----------------
+ *
+ * Auftrag des Hausherrn 23.11.2026, Entscheidungen 23./24.11.2026: dieselben Anlaesse wie die Ansage, eigener Haken je
+ * Anlass, ab Werk aus; Sperre, Bremse und Versand im Modul. Die Erkennung laeuft auch ohne Ausgabeart, wenn eine Meldung
+ * eingeschaltet ist (frw_meld_aktiv()), und legt einen Anlass hin, wenn Ansage ODER Meldung ihn will
+ * (frw_meld_will()); der Sender trennt die Wege wieder (frw_meld_nur_ansage()).
+ */
+
+/** Die meldbaren Anlaesse: Name => Beschriftung (dieselben wie die Ansage). */
+function frw_meld_anlaesse()
+{
+    return array('stoerung' => frw_t('THEMA.WR_STOERUNG'), 'zellen' => frw_t('THEMA.SP_WARN_ZELLEN'));
+}
+
+/** Die ab-Werk-Haken der Ansage dieser Linie: so stehen auch die Haken der Meldung, solange der Block nie gespeichert ist. */
+function frw_meld_haken_vorgabe()
+{
+    return array('stoerung' => 0, 'zellen' => 0);
+}
+
+/** Ist der Haken dieses Anlasses fuer die ANSAGE gesetzt? */
+function frw_ansage_anlass_sprache($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = frw_config(false); }
+    return in_array((string) $a, array('stoerung', 'zellen'), true) && is_array($cfg) && !empty($cfg['ansage_' . $a]);
+}
+
+/** Der wirksame Block 'meldung' fuer den Betrieb (ungueltig gespeichert gilt als aus und wird im Formular genannt). */
+function frw_meld_block($cfg = null)
+{
+    if ($cfg === null) { $cfg = frw_config(false); }
+    list($b) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, frw_meld_anlaesse(), frw_meld_haken_vorgabe());
+    return $b;
+}
+
+/** Die Beanstandungen eines gespeicherten Blocks (leer = gueltig). */
+function frw_meld_bean($cfg = null)
+{
+    if ($cfg === null) { $cfg = frw_config(false); }
+    list(, $f) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, frw_meld_anlaesse(), frw_meld_haken_vorgabe());
+    return $f;
+}
+
+/** Ist irgendein Anlass zur Meldung eingeschaltet? Dann laeuft die Erkennung auch ohne Ausgabeart. */
+function frw_meld_aktiv($cfg = null)
+{
+    return meld_irgendein_an(frw_meld_block($cfg));
+}
+
+/** Will die Ansage ODER die Meldung diesen Anlass? */
+function frw_meld_will($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = frw_config(false); }
+    return frw_ansage_anlass_sprache($a, $cfg) || meld_anlass_an(frw_meld_block($cfg), (string) $a);
+}
+
+/** Der Kontext des Moduls: Datenordner (data/plugins/<ordner>, daraus der Absender) und Texte - wie bei der Ansage. */
+function frw_meld_k()
+{
+    return frw_ansage_k();
+}
+
+/** Fuer die Ansage nur Eintraege, deren Ansage-Haken gesetzt ist; ein Eintrag ohne bekannten Anlass bleibt wie bisher. */
+function frw_meld_nur_ansage(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = frw_config(false); }
+    $anl = frw_meld_anlaesse();
+    $aus = array();
+    foreach ($l as $e) {
+        if (is_array($e) && array_key_exists(meld_anlass_von($e), $anl) && !frw_ansage_anlass_sprache(meld_anlass_von($e), $cfg)) { continue; }
+        $aus[] = $e;
+    }
+    return $aus;
+}
+
+/** Die Eintraege an SignalBot melden. Protokoll: eine Zeile, wenn gesendet oder gescheitert (nie der Text). */
+function frw_meld_senden(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = frw_config(false); }
+    $b = frw_meld_block($cfg);
+    if (empty($b['ein']) || !$l) { return null; }
+    $a = meld_regel_senden($l, $b, frw_meld_k());
+    if ($a['regel'] === '' || in_array($a['regel'], array('BREMSE', 'STAND', 'ORDNER'), true)) {
+        frw_log(meld_regel_kurz($a));
+    }
+    return $a;
+}
+
+/** Der Knopf "Testmeldung senden": array(angenommen, Satz). Geht an Haken, Sperre und Bremse vorbei. */
+function frw_meld_test()
+{
+    $r = meld_testmeldung(frw_meld_k());
+    frw_log('Testmeldung an SignalBot: ' . ($r[0] ? 'angenommen' : 'nicht angenommen'));
+    return $r;
+}
+
+/** Der Block im Einstellungsformular (unter den Ansage-Regeln, im selben Formular), mit Lage und Knopf. */
+function frw_meld_form_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = frw_config(false); }
+    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); };
+    $k = frw_meld_k();
+    $o = array();
+    /* 0.9.10: unsichtbarer Doppel des Speicherknopfs VOR dem Knopf Testmeldung - die Eingabetaste in einem Textfeld
+     * loest den ersten Absendeknopf des Formulars aus; sie soll speichern wie bisher, nicht die Testmeldung senden. */
+    $o[] = '<button data-role="none" type="submit" name="ansage_speichern" value="1" tabindex="-1" aria-hidden="true" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden"></button>';
+    $o[] = '<h3>' . $e(meld_t('TITEL', $k)) . '</h3>';
+    $o[] = meld_formular_html(frw_meld_block($cfg), frw_meld_anlaesse(), array(), $k);
+    list(, $lage) = meld_pruefzeile(frw_meld_block($cfg), frw_meld_bean($cfg), $k);
+    $o[] = '<div class="sm-hilfe">' . $e(meld_t('F_TEST', $k) . ' ' . $lage) . '</div>';
+    $o[] = '<div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="meld_test" value="1">'
+         . $e(meld_t('K_TEST', $k)) . '</button></div>';
+    return implode("\n", $o) . "\n";
 }

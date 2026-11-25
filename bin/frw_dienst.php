@@ -80,6 +80,6 @@ if ($frw_arg !== '') {
     exit(2);
 }
 
-frw_config_vervollstaendigen();
+frw_dienst_pflege();     // 0.9.10: vervollstaendigen und Lade-Beanstandungen einmal melden (Regeln/05)
 $frw_erg = frw_takt();
 exit(in_array($frw_erg['ende'], array('ohne_wurzel', 'sperre_fehlt'), true) ? 1 : 0);

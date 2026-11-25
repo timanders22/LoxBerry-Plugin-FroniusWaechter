@@ -289,6 +289,8 @@ if ($frw_post && isset($_POST['ansage_speichern'])) {
     $frw_rm = array();
     $frw_rb = array();
     list($frw_neu['ansage_regeln']) = ansage_regeln_formular($_POST, frw_ansage_regeln($frw_cfg), array(), $frw_rm, $frw_rb, frw_ansage_k());
+    // 0.9.10: der Block 'Meldungen an SignalBot' (eine Beanstandung haelt das Speichern an, wie die Ansage)
+    $frw_neu['meldung'] = meld_formular_lesen($_POST, isset($frw_cfg['meldung']) ? $frw_cfg['meldung'] : null, frw_meld_anlaesse(), $frw_rm, $frw_rb, frw_meld_k(), frw_meld_haken_vorgabe());
     $frw_neu['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST,
         isset($frw_cfg['ansage_token_herkunft']) && is_array($frw_cfg['ansage_token_herkunft']) ? $frw_cfg['ansage_token_herkunft'] : array());
     $frw_neu['ansage_stoerung'] = empty($_POST['ansage_stoerung']) ? 0 : 1;
@@ -314,6 +316,12 @@ if ($frw_post && isset($_POST['ansage_speichern'])) {
 /* ---------------- Testansage (Reiter Test, 0.9.7, E1) ----------------
  * ansage_test spricht an alle Ziele, ansage_test_ziel=n nur an Ziel n. Ins Protokoll nur die Kurzform, nie Text oder
  * Token. Die Testansage geht an Nachtruhe, Sperre und Schalter vorbei (Modul). */
+/* 0.9.10: Testmeldung an SignalBot (Knopf unter den Ansage-Regeln). */
+if ($frw_post && isset($_POST['meld_test'])) {
+    list($meld_ok, $meld_satz) = frw_meld_test();
+    if ($meld_ok) { $frw_meldung = $meld_satz; } else { $frw_fehler[] = $meld_satz; }
+    $frw_tab = 'tab-test';
+}
 if ($frw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
     $frw_tk = frw_ansage_k();
     $frw_tnur = (isset($_POST['ansage_test_ziel']) && frw_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
@@ -365,7 +373,9 @@ if ($frw_post && isset($_POST['frw_zurueck'])) {
         $frw_sm = sicherung_meldungen($frw_b, $frw_ab);
     } else {
         $frw_b['speichern'] = function ($neu) {
-            return frw_config_speichern($neu);
+            // 0.9.10: die Werte einer Sicherung sind ausdruecklich - kein "Dateiwert behalten" (Regeln/05)
+            $zw = null;
+            return frw_config_speichern($neu, $zw, false);
         };
         $frw_b['zweitschrift'] = function () {
             $p = frw_paths();
@@ -431,6 +441,33 @@ if ($frw_post && isset($_POST['messen'])) {
         }
     }
     $frw_tab = 'tab-test';
+}
+
+/* ---------------- Lade-Beanstandungen: angezeigte Werte uebernehmen (0.9.10) ----------------
+ * Nur mit gesetztem Haken (Entscheidung des Hausherrn 24.11.2026, "Haken im gelben Kasten"); ohne ihn bleibt die Datei
+ * byte-gleich. Geschrieben ohne "Dateiwert behalten". Der Wachposten oben hat $_POST bei fremdem Merkmal schon geleert;
+ * die Seite maskiert die Meldungen bei der Ausgabe (frw_e()). */
+if ($frw_post && sicherung_lade_eingang($_POST) !== '') {
+    $frw_ladeb = frw_lade_b(false);
+    if (sicherung_lade_eingang($_POST) !== 'ja') {
+        $frw_fehler[] = sicherung_t('K_LADE_HAKEN_FEHLT', $frw_ladeb);
+    } else {
+        $frw_laded = frw_lade_roh();
+        $frw_lv = frw_config(false);
+        $frw_un = array();
+        if (is_array($frw_laded) && is_array($frw_lv)) {
+            list($frw_lneu, $frw_un) = sicherung_lade_uebernehmen_stand($frw_laded, $frw_lv, sicherung_lade_beanstandungen($frw_ladeb, $frw_laded, $frw_lv));
+            $frw_lzw = null;
+            if ($frw_un && !frw_config_speichern($frw_lneu, $frw_lzw, false)) {
+                $frw_fehler[] = sicherung_t('K_SCHREIBFEHLER', $frw_ladeb);
+                $frw_un = array();
+            }
+        }
+        if ($frw_un) {
+            frw_log('Lade-Beanstandungen: angezeigte Werte uebernommen: ' . implode(', ', array_map('sicherung_name', $frw_un)));
+            $frw_meldung = sprintf(sicherung_t('K_LADE_UEBERNOMMEN', $frw_ladeb), implode(', ', $frw_un));
+        }
+    }
 }
 
 /* ---------------- Umleitung nach jedem POST ---------------- */
@@ -582,7 +619,12 @@ if ($frw_rahmen) {
         } ?></ul></div>
 <?php } elseif (is_string($frw_fm)) { ?><div class="sm-fehler"><?= frw_e($frw_fm) ?></div><?php }
 } ?>
+<?php /* 0.9.10: Lade-Beanstandungen (Regeln/05) - gelber Kasten; einmal je Aenderung ins Protokoll. */
+$frw_lade = frw_lade_beanstandungen();
+frw_lade_melden($frw_lade); ?>
 
+<?= sicherung_lade_kasten(frw_lade_b(true), isset($frw_lade) ? $frw_lade : frw_lade_beanstandungen(),
+        frw_fmt() . '<input data-role="none" type="hidden" name="activetab" value="' . frw_e($frw_tab) . '">') ?>
 <?php /* Kopf: Stand des letzten Laufs aus stand.json - die Seite fragt dafuer keinen Datamanager. */
 $frw_k_ts = isset($frw_stand['ts']) ? (int) $frw_stand['ts'] : 0; ?>
 <table class="sm-tbl" style="max-width:640px">
@@ -743,6 +785,7 @@ if (!$frw_dms) {
     'm' => function ($n) { return frw_x2_mark('ansage', $n); },
     'c' => function ($n, $g) { return frw_x2_haken('ansage', $n, $g) !== ''; },
     'token_vor_ort' => true), frw_ansage_k()) ?>
+<?= frw_meld_form_html($frw_cfg) ?>
 <p class="sm-hilfe"><?= frw_e(sprintf(frw_t('EINST.ANSAGE_TEST_HINWEIS'), frw_t('REITER.TEST'))) ?></p>
 <div class="sm-knopfreihe">
 	<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_speichern" value="1"><?= frw_e(frw_t('EINST.K_ANSAGE_SPEICHERN')) ?></button>
@@ -926,6 +969,16 @@ $frw_zeilen[] = array(frw_t('TEST.F_KONFIG'), frw_pruef_konfiguration());
 $frw_zeilen[] = array(frw_t('TEST.F_HEIL'), frw_pruef_heil());
 $frw_abgew = frw_config_abgewiesen();
 $frw_zeilen[] = array(frw_t('TEST.F_WERTE'), $frw_abgew ? array('fehl', sprintf(frw_t('TEST.WERTE_FEHL'), implode(', ', $frw_abgew))) : array('ok', frw_t('TEST.WERTE_OK')));
+/* 0.9.10: Lade-Beanstandungen (Regeln/05, Sicherungsmodul 1.3.0) - rot, solange ein gespeicherter Wert beim Laden nicht so
+ * gilt, wie er gespeichert ist (die Namen nennt TEST.F_WERTE oben schon; hier mit Wert und als Satz aller Linien). */
+$frw_ladeb = frw_lade_b(false);
+$frw_la = frw_lade_beanstandungen(null, false);
+$frw_zeilen[] = array(sicherung_t('K_LADE_FRAGE', $frw_ladeb), $frw_la ? array('fehl', implode(' ', sicherung_lade_saetze($frw_ladeb, $frw_la)))
+    : array('ok', sicherung_t('K_LADE_KEINE', $frw_ladeb)));
+// 0.9.10: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+$frw_hb = frw_pruef_praefix_haus($frw_cfg);
+$frw_zeilen[] = array(frw_t('HAUSBEREICH.F_TEST'),
+    array($frw_hb[0] === 1 ? 'ok' : ($frw_hb[0] === 0 ? 'fehl' : 'hinweis'), $frw_hb[1]));
 $frw_zeilen[] = array(frw_t('TEST.F_REITER'), frw_pruef_reiter(__FILE__));
 $frw_zeilen[] = array(frw_t('TEST.F_SMACTIVE'), frw_pruef_smactive(__FILE__));
 $frw_zeilen[] = array(frw_t('TEST.F_FORM'), frw_pruef_formulare(__FILE__));
