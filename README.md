@@ -1,6 +1,6 @@
 # Fronius-Wächter
 
-Version 0.9.10 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
+Version 0.9.11 · LoxBerry ab 3.0 · PHP 7.4 bis 8.5 · noch auf keinem LoxBerry installiert
 
 ## Neu in 0.9.10
 
